@@ -20,18 +20,24 @@ import cmocean.cm as cmo
 
 this_dir = os.path.dirname(os.path.realpath(__file__))
 
-tracer_source = this_dir + '/' + 'climato_Y8_sst.nc'
-output_name = 'sst_preproc.mp4'
+# Name of the file used for SST (or other) data
+tracer_source = this_dir + '/' + 'model_data.nc'
+
+output_name = 'sample_animation.mp4'
 
 ##############################################################################
 # Parameters #################################################################
 ##############################################################################
 
-tmin = 22.0
-tmax = 30.0
+# SST variable name
+sst_variable_name = 'SST'
+
+# Minimum and maximum temperatures
+tmin = 22.5
+tmax = 29.5
 
 fps = 15
-total_frames = 365
+total_frames = 12
 
 day_per_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
 months = ['January',
@@ -61,7 +67,12 @@ f.subplots_adjust(left=0, bottom=0, right=1, top=1, wspace=None, hspace=None)
 ls = LightSource(azdeg=315, altdeg=30)
 
 with Dataset(tracer_source, mode='r') as nc:
-    sst = np.flipud(nc.variables['temp_surf'][0, :, :])
+    # Check that there is enough data in the file
+    if np.shape(nc.variables[sst_variable_name][:])[0] < total_frames:
+        raise ValueError('total_frames exceeds number of frames in data!')
+
+    sst = np.flipud(nc.variables[sst_variable_name][0, :, :])
+
     sst = np.ma.masked_values(sst, 0)
     sst_im = ls.shade(sst, cmap=cmo.balance, blend_mode='soft', vert_exag=75,
                       vmin=tmin, vmax=tmax)
@@ -80,7 +91,7 @@ date = ax.text(30, 50, 'January 10', fontsize='20', **csfont)
 
 def animate_ocean(t):
     with Dataset(tracer_source, mode='r') as nc:
-        sst = np.flipud(nc.variables['temp_surf'][t, :, :])
+        sst = np.flipud(nc.variables[sst_variable_name][t, :, :])
         sst = np.ma.masked_values(sst, 0)
         sst_im = ls.shade(sst, cmap=cmo.balance, blend_mode='soft',
                           vert_exag=75, vmin=tmin, vmax=tmax)
@@ -110,3 +121,11 @@ animation = ani.FuncAnimation(f,
 animation.save(output_name,
                fps=fps,
                bitrate=16000,)
+
+
+
+
+im = ax.imshow(sst_im, aspect='auto')
+ax.set_axis_off()
+
+date = ax.text(30, 50, 'January 10', fontsize='20', **csfont)
