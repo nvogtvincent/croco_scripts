@@ -13,6 +13,20 @@ from matplotlib.colors import LightSource
 import matplotlib.animation as ani
 import cmocean.cm as cmo
 
+##############################################################################
+# ADAPTING THIS SCRIPT TO YOUR DATA ##########################################
+##############################################################################
+
+# This is a very simple script that takes a set of SST fields (or some other
+# tracer of interest) and plots it as a coloured heightmap. The script
+# by default generates a 1-frame-long animation from the sample file provided
+# (croco_frame.nc) but this can be adapted easily to your own data by
+# modifying the file handle and selecting the correct variable name (line 42).
+#
+# You will also need to change the number of frames depending on the timespan
+# you want the animation to cover, and how many time frames your data contains.
+# You may also wish to change the SST min/max to reflect the region you are
+# plotting.
 
 ##############################################################################
 # File locations #############################################################
@@ -21,7 +35,7 @@ import cmocean.cm as cmo
 this_dir = os.path.dirname(os.path.realpath(__file__))
 
 # Name of the file used for SST (or other) data
-tracer_source = this_dir + '/' + 'model_data.nc'
+tracer_source = this_dir + '/' + 'croco_frame.nc'
 
 output_name = 'sample_animation.mp4'
 
@@ -30,14 +44,14 @@ output_name = 'sample_animation.mp4'
 ##############################################################################
 
 # SST variable name
-sst_variable_name = 'SST'
+sst_variable_name = 'temp_surf'
 
-# Minimum and maximum temperatures
+# Minimum and maximum SST
 tmin = 22.5
 tmax = 29.5
 
 fps = 15
-total_frames = 12
+total_frames = 1
 
 day_per_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
 months = ['January',
