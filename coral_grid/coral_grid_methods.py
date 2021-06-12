@@ -116,7 +116,7 @@ def regrid_coral_raster(coral_in_fh, coral_grid_in_fh, model_grid_fh, dr):
         coral_stat = np.zeros_like(coral_psi)
         coral_stat[coral_psi == 1] = 0.325
         coral_stat[new_coral == 1] = 0.125
-        
+
         # Mask out all non-coral tiles
         coral_stat = np.ma.masked_array(coral_stat, coral_stat == 0)
 
@@ -184,3 +184,4 @@ def regrid_coral_raster(coral_in_fh, coral_grid_in_fh, model_grid_fh, dr):
 
         np.savez(out_file, coral_psi, edges_lon, edges_lat, edges_lon_psi,
                  edges_lat_psi)
+
