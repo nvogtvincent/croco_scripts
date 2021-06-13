@@ -27,15 +27,28 @@ try:
     ts = int(sys.argv[1])
     print('First time-step set to ' + str(ts))
     ts += 1
+
+    try:
+        dt = int(sys.argv[2])
+        print('Setting dt = ' + str(dt) + 's')
+    except (TypeError, IndexError):
+        print('No dt provided!')
+        dt = 90
+        print('Setting dt to 90s')
+
 except (TypeError, IndexError):
     print('No time-step provided!')
-    raise
+    ts = 0
+    print('Setting first time-step to 0')
+    print('No dt provided!')
+    dt = 90
+    print('Setting dt to 90s')
 
 # XIOS output file
 with Dataset(input_file, mode='r') as nc:
     print('Loading fields from input netcdf...')
     # Load the time from the XIOS output (the scrum_time in the new file)
-    scrum_time = np.float64(nc.variables['time'][:])
+    scrum_time = np.float64(nc.variables['time'][-1]) + dt
     time_step = np.int32([ts, 1, 1, 0])
 
     # Load the other variables (last time slice by default)
