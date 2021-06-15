@@ -14,20 +14,15 @@ import os
 # Parameters #################################################################
 ##############################################################################
 
-climvar = 'v'
+climvar = 'temp'
+year = input('Which year?')
 
 ##############################################################################
 # File locations #############################################################
 ##############################################################################
 
 this_dir = os.path.dirname(os.path.realpath(__file__))
-
-# Generator for file names
-namelist = []
-for i in range(2, 10):
-    namelist.append('Y' + str(i+1) + '_30M.nc')
-
-n_files = len(namelist)
+fh = this_dir + '/' + str(year) + '_1D.nc'
 
 # Check for climvar
 if climvar in ['temp', 'salt', 'u', 'v']:
@@ -38,6 +33,10 @@ elif climvar != 'zeta':
 
 # List of month lengths
 day_per_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+
+if year in [1996, 2000, 2004, 2008, 2012, 2016, 2020]:
+    day_per_month[1] = 29
+
 day_cumsum = np.cumsum(day_per_month)
 
 if climvar in ['u_surf', 'v_surf']:
@@ -46,36 +45,31 @@ else:
     files_per_day = 1
 
 # Output
-output_file = this_dir + '/' + 'croco_climatology_' + climvar + '.nc'
+output_file = this_dir + '/' + str(year) + '_clim_' + climvar + '.nc'
 
 ##############################################################################
 # Calculate climatology ######################################################
 ##############################################################################
 
-for i in range(n_files):
-    input_file = this_dir + '/' + namelist[i]
-    print(input_file)
+with Dataset(fh, mode='r') as nc:
+    # Set up the output array if this is the first file
+    if climvar in ['temp_surf', 'salt_surf', 'zeta']:
+        lon = nc.variables['lon_rho'][:]
+        lat = nc.variables['lat_rho'][:]
+    elif climvar in ['u_surf']:
+        lon = nc.variables['nav_lon_u'][:]
+        lat = nc.variables['nav_lat_u'][:]
+    else:
+        lon = nc.variables['nav_lon_v'][:]
+        lat = nc.variables['nav_lat_v'][:]
 
-    with Dataset(input_file, mode='r') as nc:
-        if i == 0:
-            # Set up the output array if this is the first file
-            if climvar in ['temp_surf', 'salt_surf', 'zeta']:
-                lon = nc.variables['lon_rho'][:]
-                lat = nc.variables['lat_rho'][:]
-            elif climvar in ['u_surf']:
-                lon = nc.variables['nav_lon_u'][:]
-                lat = nc.variables['nav_lat_u'][:]
-            else:
-                lon = nc.variables['nav_lon_v'][:]
-                lat = nc.variables['nav_lat_v'][:]
+    climatology = np.zeros((12, np.shape(lon)[0], np.shape(lon)[1]))
 
-            climatology = np.zeros((12, np.shape(lon)[0], np.shape(lon)[1]))
-
-        for t in range(365*files_per_day):
-            month = np.searchsorted(day_cumsum, t/files_per_day, side='right')
-            climatology[month, :, :] += (
-                (1/(files_per_day*day_per_month[month]*n_files)) *
-                nc.variables[climvar][t, :, :])
+    for t in range(365*files_per_day):
+        month = np.searchsorted(day_cumsum, t/files_per_day, side='right')
+        climatology[month, :, :] += (
+            (1/(files_per_day*day_per_month[month])) *
+            nc.variables[climvar][t, :, :])
 
 
 # Create the climatology to a new file
