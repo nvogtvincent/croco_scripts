@@ -63,10 +63,10 @@ traj_fh = trajectory_dir + '/Aldabra_test.nc'
 ##############################################################################
 
 # The number of particles to be seeded per cell = pn^2
-pn = 10
+pn = 3
 
 # Simulation length
-sim_time = 30 # days
+sim_time = 100 # days
 
 # Bounds for sink region of interest
 lon0 = 46
@@ -75,7 +75,7 @@ lat0 = -10
 lat1 = -9
 
 # Release interval
-last_release     = 362  # days
+last_release     = 200  # days
 release_number   = 1
 release_interval = 30   # days
 
@@ -138,7 +138,7 @@ pset.execute((pset.Kernel(AdvectionRK4) +
               pset.Kernel(periodicBC) +
               pset.Kernel(drift)),
               runtime=timedelta(days=sim_time),
-              dt = -timedelta(minutes=30),
+              dt = timedelta(minutes=30),
               output_file=traj)
 
 traj.export()
