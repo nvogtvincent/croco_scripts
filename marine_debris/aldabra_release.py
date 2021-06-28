@@ -21,10 +21,29 @@ from marinedebrismethods import cmems_proc, one_release, time_stagger
 ##############################################################################
 
 class marineDebris(JITParticle):
+    # Ocean time: age of particle
     ocean_time = Variable('ocean_time', dtype=np.float32, initial=0.)
+
+    # Sink time: time particle ends up at sink site
     sink_time = Variable('sink_time', dtype=np.float32, initial=0.)
+
+    # [lon0, lat0] = sink coordinates
+    # lon0 = Variable('lon0', dtype=np.float32, initial=0.)
+    # lat0 = Variable('lat0', dtype=np.float32, initial=0.)
+
+    # Events: number of events encountered
+    events = Variable('events', dtype=np.int8, initial=0)
+
+    # Variables to store beaching events
     lon0 = Variable('lon0', dtype=np.float32, initial=0.)
     lat0 = Variable('lat0', dtype=np.float32, initial=0.)
+
+    lon1 = Variable('lon1', dtype=np.float32, initial=0.)
+    lat1 = Variable('lat1', dtype=np.float32, initial=0.)
+
+    lon2 = Variable('lon2', dtype=np.float32, initial=0.)
+    lat2 = Variable('lat2', dtype=np.float32, initial=0.)
+
 
 def deleteParticle(particle, fieldset, time):
     #  Recovery kernel to delete a particle if it leaves the domain
@@ -41,6 +60,37 @@ def drift(particle, fieldset, time):
     # Record the sink time (i.e. simulation 'start' time) of the particle
     if particle.ocean_time == 0.:
         particle.sink_time = time
+
+    # Record if currently in a coast cell
+    location_status = fieldset.coast[time,
+                                     particle.depth,
+                                     particle.lat,
+                                     particle.lon]
+
+    if (location_status == 1 and particle.ocean_time > 259200.):
+        lon = particle.lon
+        lat = particle.lat
+
+        if particle.events == 0:
+            particle.lon0 = lon
+            particle.lat0 = lat
+        elif particle.events == 1:
+            particle.lon1 = lon
+            particle.lat1 = lat
+        elif particle.events == 2:
+            particle.lon2 = lon
+            particle.lat2 = lat
+
+        particle.events += 1
+
+        if particle.events == 3:
+            particle.delete()
+
+
+    # if location_status == 1:
+    #     particle.coast_status = 1
+    # else:
+    #     particle.coast_status = 0
 
     # Update the particle age
     particle.ocean_time += particle.dt
@@ -84,7 +134,7 @@ release_interval = 30   # days
 # Set up particle tracking ###################################################
 ##############################################################################
 
-# Import the mask and labelled cells
+# Import the mask and labelled cells (coast)
 coast, lsm, lon, lat, lon_bnd, lat_bnd = cmems_proc(cmems_fh, cmems_proc_fh)
 
 # Designate the source locations
@@ -118,6 +168,14 @@ fieldset.add_constant('halo_west', fieldset.U.grid.lon[0])
 fieldset.add_constant('halo_east', fieldset.U.grid.lon[-1])
 fieldset.add_periodic_halo(zonal=True)
 
+# Add the coast mask
+coastgrid = Field.from_netcdf(cmems_proc_fh,
+                              variable='coast',
+                              dimensions={'lon': 'longitude',
+                                         'lat': 'latitude'},
+                              interp_method='nearest',
+                              allow_time_extrapolation=True)
+fieldset.add_field(coastgrid)
 
 # Add diffusion
 # fieldset.add_constant_field('Kh_zonal', Kh_zonal, mesh='spherical')
@@ -130,16 +188,24 @@ pset = ParticleSet.from_list(fieldset=fieldset,
                              lat = pos0[:, 1],
                              time = pos0[:, 2])
 
+# Prevent writing unnecessary information (depth)
+# for v in pset.ptype.variables:
+#     if v.name == 'depth':
+#         v.to_write = False
+
 # Set up the simulation
 traj = pset.ParticleFile(name=traj_fh,
-                         outputdt=timedelta(hours=1))
+                         outputdt=timedelta(hours=1),
+                         write_ondelete=True)
 
-pset.execute((pset.Kernel(AdvectionRK4) +
-              pset.Kernel(periodicBC) +
-              pset.Kernel(drift)),
-              runtime=timedelta(days=sim_time),
-              dt = timedelta(minutes=30),
-              output_file=traj)
+kernels = (pset.Kernel(AdvectionRK4) +
+           pset.Kernel(periodicBC) +
+           pset.Kernel(drift))
+
+pset.execute(kernels,
+             runtime=timedelta(days=sim_time),
+             dt = timedelta(minutes=30),
+             output_file=traj)
 
 traj.export()
 plotTrajectoriesFile(traj_fh)
