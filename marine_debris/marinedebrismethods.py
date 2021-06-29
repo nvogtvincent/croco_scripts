@@ -39,6 +39,7 @@ def cmems_proc(model_fh, mask_fh):
     if os.path.isfile(mask_fh):
         with Dataset(mask_fh, mode='r') as nc:
             coast = np.array(nc.variables['coast'][:])
+            groups = np.array(nc.variables['groups'][:])
             lsm = np.array(nc.variables['lsm'][:])
             lon = np.array(nc.variables['longitude'][:])
             lon_bnd = np.array(nc.variables['longitude_bnd'][:])
@@ -49,6 +50,7 @@ def cmems_proc(model_fh, mask_fh):
             lon = np.array(nc.variables['longitude'][:])
             lat = np.array(nc.variables['latitude'][:])
             uo  = np.array(nc.variables['uo'][0, 0, :, :])
+            fill = nc.variables['uo']._FillValue
 
         # Generate boundary points
         dx = lon[1] - lon[0]
@@ -64,10 +66,48 @@ def cmems_proc(model_fh, mask_fh):
 
         # Generate the mask
         lsm = np.zeros_like(uo)
-        lsm[uo == -32767] = 1  # Set land cells to 1
+        lsm[uo == fill] = 1  # Set land cells to 1
 
         # Identify coast cells
         coast = id_coast(lsm)  # Where coast cells are 1
+
+        # Exclude the Mediterannean
+        med_s_lat = 30
+        med_s_index = np.searchsorted(lat, med_s_lat)
+        med_e_lon = 42
+        med_e_index = np.searchsorted(lon, med_e_lon)
+
+        coast[med_s_index:, :med_e_index] = 0
+
+        # Now group coast cells into 10x10 groups
+        # Format:
+        # ID: XXXYYY
+        # XXX = group number (100-999)
+        # YYY = cell number in group (000-099)
+
+        gsize = 24
+        ngroups_y = int(np.floor(len(lat)/gsize))
+        ngroups_x = int(np.floor(len(lon)/gsize))  # Floor -> last lines ignored
+
+        groups = np.zeros_like(coast)
+        group_count = 0
+
+        template = np.reshape(np.linspace(0, (gsize**2)-1,
+                                          num=gsize**2,
+                                          dtype=np.int32),
+                              (gsize, gsize))
+
+        for i in range(ngroups_y):
+            for j in range(ngroups_x):
+                # Firstly check if there are any coast cells
+                subset = coast[i*gsize:(i+1)*gsize, j*gsize:(j+1)*gsize]
+                if np.sum(subset) > 0:
+                    subset = template + 1E5 + group_count*1E3
+                    groups[i*gsize:(i+1)*gsize, j*gsize:(j+1)*gsize] = subset
+                    group_count += 1
+
+        groups[coast == 0] = 0  # Only have nonzero values for ocean points
+        print(str(group_count) + ' groups in total.')
 
         # Save to netcdf
         with Dataset(mask_fh, mode='w') as nc:
@@ -113,7 +153,14 @@ def cmems_proc(model_fh, mask_fh):
             nc.variables['coast'].standard_name = 'coast_mask'
             nc.variables['coast'][:] = coast
 
-    return coast, lsm, lon, lat, lon_bnd, lat_bnd
+            nc.createVariable('groups', 'i4', ('lat', 'lon'), zlib=True,
+                              fill_value=0)
+            nc.variables['groups'].long_name = 'groups'
+            nc.variables['groups'].units = '[XXX/YYY] XXX: group number, YYY: cell index'
+            nc.variables['groups'].standard_name = 'groups'
+            nc.variables['groups'][:] = groups
+
+    return coast, groups, lsm, lon, lat, lon_bnd, lat_bnd
 
 def one_release(lon0, lon1, lat0, lat1, coast, coast_lon, coast_lat,
                 coast_lon_bnd, coast_lat_bnd, pn):
