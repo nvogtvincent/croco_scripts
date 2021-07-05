@@ -29,6 +29,30 @@ def id_coast(mask):
 
     return coast
 
+@numba.jit(nopython=True)
+def psi_mask(lsm_rho, lsm_psi):
+    # This function generates a land-sea mask on an empty psi grid from the
+    # rho grid
+    for i in range(np.shape(lsm_psi)[0]):
+        for j in range(np.shape(lsm_psi)[1]):
+            if j == np.shape(lsm_psi)[1]-1:
+                # Wraparound (special case for last column)
+                val = (lsm_rho[i, j] +
+                       lsm_rho[i + 1, j] +
+                       lsm_rho[i, 0] +
+                       lsm_rho[i + 1, 0])
+            else:
+                val = (lsm_rho[i, j] +
+                       lsm_rho[i+1, j] +
+                       lsm_rho[i, j+1] +
+                       lsm_rho[i+1, j+1])
+
+            if val == 4:
+                lsm_psi[i, j] = 1
+
+    return lsm_psi
+
+
 
 def cmems_proc(model_fh, mask_fh):
     # This function takes output from CMEMS GLORYS12V1 and generates
@@ -161,6 +185,142 @@ def cmems_proc(model_fh, mask_fh):
             nc.variables['groups'][:] = groups
 
     return coast, groups, lsm, lon, lat, lon_bnd, lat_bnd
+
+def cmems_globproc(model_fh, mask_fh):
+    # This function takes output from global CMEMS GLORYS12V1 and generates
+    # Labelled coast cells
+    # A land mask
+    # Cell boundaries (boundary points)
+
+    # Note:
+    # Velocities are defined on the rho grid
+    # Land-sea mask/coast are defined on the psi grid
+
+    if os.path.isfile(mask_fh):
+        with Dataset(mask_fh, mode='r') as nc:
+            coast_psi = np.array(nc.variables['coast_psi'][:])
+            lsm_psi = np.array(nc.variables['lsm_psi'][:])
+            lon_rho = np.array(nc.variables['lon_rho'][:])
+            lon_psi = np.array(nc.variables['lon_psi'][:])
+            lat_rho = np.array(nc.variables['lat_rho'][:])
+            lat_psi = np.array(nc.variables['lat_psi'][:])
+    else:
+        with Dataset(model_fh, mode='r') as nc:
+            lon = np.array(nc.variables['longitude'][:])
+            lat = np.array(nc.variables['latitude'][:])
+            lon_rho, lat_rho = np.meshgrid(lon, lat)
+
+            uo  = np.array(nc.variables['uo'][0, 0, :, :])
+            fill = nc.variables['uo']._FillValue
+
+        # Generate the global psi grid
+        lat_psi = np.linspace(-80 + (1/24), 90 - (1/24), num=170*12)
+        lon_psi = np.linspace(-180 + (1/24), 180 - (1/24), num=360*12)
+
+        lon_psi, lat_psi = np.meshgrid(lon_psi, lat_psi)
+
+        # Now generate the mask on the lat/lon (rho) grid
+        lsm_rho = np.zeros_like(uo, dtype=np.int8)
+        lsm_rho[uo == fill] = 1  # Set land cells to 1
+
+        # Now generate the ('true') mask on the lat/lon (psi) grid:
+        # A node on the psi grid is 'land' if all 4 surrounding nodes on the
+        # rho grid are also land
+        lsm_psi = np.zeros_like(lat_psi)
+        lsm_psi = psi_mask(lsm_rho, lsm_psi)
+
+        # Identify coast cells
+        coast_psi = id_coast(lsm_psi)  # Where coast cells are 1
+
+        # Now group coast cells into 10x10 groups
+        # Format:
+        # ID: XXXYYY
+        # XXX = group number (100-999)
+        # YYY = cell number in group (000-099)
+
+        # gsize = 24
+        # ngroups_y = int(np.floor(len(lat)/gsize))
+        # ngroups_x = int(np.floor(len(lon)/gsize))  # Floor -> last lines ignored
+
+        # groups = np.zeros_like(coast)
+        # group_count = 0
+
+        # template = np.reshape(np.linspace(0, (gsize**2)-1,
+        #                                   num=gsize**2,
+        #                                   dtype=np.int32),
+        #                       (gsize, gsize))
+
+        # for i in range(ngroups_y):
+        #     for j in range(ngroups_x):
+        #         # Firstly check if there are any coast cells
+        #         subset = coast[i*gsize:(i+1)*gsize, j*gsize:(j+1)*gsize]
+        #         if np.sum(subset) > 0:
+        #             subset = template + 1E5 + group_count*1E3
+        #             groups[i*gsize:(i+1)*gsize, j*gsize:(j+1)*gsize] = subset
+        #             group_count += 1
+
+        # groups[coast == 0] = 0  # Only have nonzero values for ocean points
+        # print(str(group_count) + ' groups in total.')
+
+        # Save to netcdf
+        with Dataset(mask_fh, mode='w') as nc:
+            # Create the dimensions
+            nc.createDimension('lon_rho', np.shape(lon_rho)[1])
+            nc.createDimension('lat_rho', np.shape(lon_rho)[0])
+            nc.createDimension('lon_psi', np.shape(lon_psi)[1])
+            nc.createDimension('lat_psi', np.shape(lon_psi)[0])
+
+            nc.createVariable('lon_psi', 'f4', ('lat_psi', 'lon_psi'), zlib=True)
+            nc.variables['lon_psi'].long_name = 'longitude_on_psi_points'
+            nc.variables['lon_psi'].units = 'degrees_east'
+            nc.variables['lon_psi'].standard_name = 'longitude_psi'
+            nc.variables['lon_psi'][:] = lon_psi
+
+            nc.createVariable('lat_psi', 'f4', ('lat_psi', 'lon_psi'), zlib=True)
+            nc.variables['lat_psi'].long_name = 'latitude_on_psi_points'
+            nc.variables['lat_psi'].units = 'degrees_north'
+            nc.variables['lat_psi'].standard_name = 'latitude_psi'
+            nc.variables['lat_psi'][:] = lat_psi
+
+            nc.createVariable('lon_rho', 'f4', ('lat_rho', 'lon_rho'), zlib=True)
+            nc.variables['lon_rho'].long_name = 'longitude_on_rho_points'
+            nc.variables['lon_rho'].units = 'degrees_east'
+            nc.variables['lon_rho'].standard_name = 'longitude_rho'
+            nc.variables['lon_rho'][:] = lon_rho
+
+            nc.createVariable('lat_rho', 'f4', ('lat_rho', 'lon_rho'), zlib=True)
+            nc.variables['lat_rho'].long_name = 'latitude_on_rho_points'
+            nc.variables['lat_rho'].units = 'degrees_north'
+            nc.variables['lat_rho'].standard_name = 'latitude_rho'
+            nc.variables['lat_rho'][:] = lat_rho
+
+            nc.createVariable('lsm_psi', 'i2', ('lat_psi', 'lon_psi'), zlib=True)
+            nc.variables['lsm_psi'].long_name = 'land_sea_mask_on_psi_points'
+            nc.variables['lsm_psi'].units = '1 = Land, 0 = Sea'
+            nc.variables['lsm_psi'].standard_name = 'land_sea_mask_psi'
+            nc.variables['lsm_psi'][:] = lsm_psi
+
+            nc.createVariable('lsm_rho', 'i2', ('lat_rho', 'lon_rho'), zlib=True)
+            nc.variables['lsm_rho'].long_name = 'land_sea_mask_on_rho_points'
+            nc.variables['lsm_rho'].units = '1 = Land, 0 = Sea'
+            nc.variables['lsm_rho'].standard_name = 'land_sea_mask_rho'
+            nc.variables['lsm_rho'][:] = lsm_rho
+
+            nc.createVariable('coast_psi', 'i2', ('lat_psi', 'lon_psi'), zlib=True)
+            nc.variables['coast_psi'].long_name = 'coast_mask_on_psi_points'
+            nc.variables['coast_psi'].units = '1 = Coast, 0 = Not coast'
+            nc.variables['coast_psi'].standard_name = 'coast_mask_psi'
+            nc.variables['coast_psi'][:] = coast_psi
+
+            # nc.createVariable('groups', 'i4', ('lat', 'lon'), zlib=True,
+            #                   fill_value=0)
+            # nc.variables['groups'].long_name = 'groups'
+            # nc.variables['groups'].units = '[XXX/YYY] XXX: group number, YYY: cell index'
+            # nc.variables['groups'].standard_name = 'groups'
+            # nc.variables['groups'][:] = groups
+
+    return coast_psi, lsm_psi, lon_rho, lat_rho, lon_psi, lat_psi
+
 
 def one_release(lon0, lon1, lat0, lat1, coast, coast_lon, coast_lat,
                 coast_lon_bnd, coast_lat_bnd, pn):
