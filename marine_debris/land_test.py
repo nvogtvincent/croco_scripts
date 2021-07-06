@@ -138,6 +138,11 @@ disp_lon_psi_, disp_lat_psi_ = np.meshgrid(disp_lon_psi, disp_lat_psi)
 ax.pcolormesh(disp_lon_rho, disp_lat_rho, disp_lsm_psi, cmap=cm.topo,
               vmin=-0.5, vmax=1.5)
 
+# Plot the coast_psi mask
+ax.pcolormesh(disp_lon_rho, disp_lat_rho,
+              np.ma.masked_values(disp_coast_psi, 0), cmap=cm.topo,
+              vmin=0, vmax=3)
+
 # Plot the lsm_psi nodes
 ax.scatter(disp_lon_rho_, disp_lat_rho_, c=disp_lsm_rho, s=10, marker='o',
            cmap=cm.gray_r)
