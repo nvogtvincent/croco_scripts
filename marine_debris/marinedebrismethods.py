@@ -12,35 +12,23 @@ from scipy import ndimage
 import os.path
 import numba
 
-@numba.jit(nopython=True, parallel=True)
-def id_coast(mask):
-    # Extracts coast cells from a mask
-    coast = np.zeros_like(mask)
-
-    ny = np.shape(coast)[0]
-    nx = np.shape(coast)[1]
-
-    for i in range(1, ny-1):
-        for j in range(1, nx-1):
-            coastcheck = mask[i-1:i+2, j-1:j+2]
-
-            if (np.sum(coastcheck) >= 1) and (mask[i, j] == 0):
-                coast[i, j] = 1
-
-    return coast
-
 @numba.jit(nopython=True)
-def psi_mask(lsm_rho, lsm_psi):
+def psi_mask(lsm_rho, psi_grid):
     # This function generates a land-sea mask on an empty psi grid from the
     # rho grid
-    # Land nodes on the rho grid are defined as being at the centre of 4 land
-    # nodes on the psi grid:
+    # Land nodes on the psi grid are defined as being at the centre of 4 land
+    # nodes on the rho grid:
+    # Coast nodes on the psi grid are defined as being at the centre of 1-3
+    # land nodes on the rho grid:
 
     # p_______p
     # |   :   |
     # |...r...|
     # |   :   |
     # p_______p
+
+    lsm_psi   = np.zeros_like(psi_grid)
+    coast_psi = np.zeros_like(psi_grid)
 
     for i in range(np.shape(lsm_psi)[0]):
         for j in range(np.shape(lsm_psi)[1]):
@@ -58,141 +46,10 @@ def psi_mask(lsm_rho, lsm_psi):
 
             if val == 4:
                 lsm_psi[i, j] = 1
+            elif val in [1, 2, 3]:
+                coast_psi[i, j] = 1
 
-    return lsm_psi
-
-
-def cmems_proc(model_fh, mask_fh):
-    # This function takes output from CMEMS GLORYS12V1 and generates
-    # Labelled coast cells
-    # A land mask
-    # Cell boundaries (boundary points)
-
-    if os.path.isfile(mask_fh):
-        with Dataset(mask_fh, mode='r') as nc:
-            coast = np.array(nc.variables['coast'][:])
-            groups = np.array(nc.variables['groups'][:])
-            lsm = np.array(nc.variables['lsm'][:])
-            lon = np.array(nc.variables['longitude'][:])
-            lon_bnd = np.array(nc.variables['longitude_bnd'][:])
-            lat = np.array(nc.variables['latitude'][:])
-            lat_bnd = np.array(nc.variables['latitude_bnd'][:])
-    else:
-        with Dataset(model_fh, mode='r') as nc:
-            lon = np.array(nc.variables['longitude'][:])
-            lat = np.array(nc.variables['latitude'][:])
-            uo  = np.array(nc.variables['uo'][0, 0, :, :])
-            fill = nc.variables['uo']._FillValue
-
-        # Generate boundary points
-        dx = lon[1] - lon[0]
-        dy = lat[1] - lat[0]
-
-        lon_bnd = np.linspace(lon[0] - dx/2,
-                              lon[-1] + dx/2,
-                              num = len(lon) + 1)
-
-        lat_bnd = np.linspace(lat[0] - dx/2,
-                              lat[-1] + dx/2,
-                              num = len(lat) + 1)
-
-        # Generate the mask
-        lsm = np.zeros_like(uo)
-        lsm[uo == fill] = 1  # Set land cells to 1
-
-        # Identify coast cells
-        coast = id_coast(lsm)  # Where coast cells are 1
-
-        # Exclude the Mediterannean
-        med_s_lat = 30
-        med_s_index = np.searchsorted(lat, med_s_lat)
-        med_e_lon = 42
-        med_e_index = np.searchsorted(lon, med_e_lon)
-
-        coast[med_s_index:, :med_e_index] = 0
-
-        # Now group coast cells into 10x10 groups
-        # Format:
-        # ID: XXXYYY
-        # XXX = group number (100-999)
-        # YYY = cell number in group (000-099)
-
-        gsize = 24
-        ngroups_y = int(np.floor(len(lat)/gsize))
-        ngroups_x = int(np.floor(len(lon)/gsize))  # Floor -> last lines ignored
-
-        groups = np.zeros_like(coast)
-        group_count = 0
-
-        template = np.reshape(np.linspace(0, (gsize**2)-1,
-                                          num=gsize**2,
-                                          dtype=np.int32),
-                              (gsize, gsize))
-
-        for i in range(ngroups_y):
-            for j in range(ngroups_x):
-                # Firstly check if there are any coast cells
-                subset = coast[i*gsize:(i+1)*gsize, j*gsize:(j+1)*gsize]
-                if np.sum(subset) > 0:
-                    subset = template + 1E5 + group_count*1E3
-                    groups[i*gsize:(i+1)*gsize, j*gsize:(j+1)*gsize] = subset
-                    group_count += 1
-
-        groups[coast == 0] = 0  # Only have nonzero values for ocean points
-        print(str(group_count) + ' groups in total.')
-
-        # Save to netcdf
-        with Dataset(mask_fh, mode='w') as nc:
-            # Create the dimensions
-            nc.createDimension('lon', len(lon))
-            nc.createDimension('lat', len(lat))
-            nc.createDimension('lon_bnd', len(lon_bnd))
-            nc.createDimension('lat_bnd', len(lat_bnd))
-
-            nc.createVariable('longitude', 'f4', ('lon'), zlib=True)
-            nc.variables['longitude'].long_name = 'longitude'
-            nc.variables['longitude'].units = 'degrees_east'
-            nc.variables['longitude'].standard_name = 'longitude'
-            nc.variables['longitude'][:] = lon
-
-            nc.createVariable('latitude', 'f4', ('lat'), zlib=True)
-            nc.variables['latitude'].long_name = 'latitude'
-            nc.variables['latitude'].units = 'degrees_north'
-            nc.variables['latitude'].standard_name = 'latitude'
-            nc.variables['latitude'][:] = lat
-
-            nc.createVariable('longitude_bnd', 'f4', ('lon_bnd'), zlib=True)
-            nc.variables['longitude_bnd'].long_name = 'longitude_bound'
-            nc.variables['longitude_bnd'].units = 'degrees_east'
-            nc.variables['longitude_bnd'].standard_name = 'longitude_bound'
-            nc.variables['longitude_bnd'][:] = lon_bnd
-
-            nc.createVariable('latitude_bnd', 'f4', ('lat_bnd'), zlib=True)
-            nc.variables['latitude_bnd'].long_name = 'latitude_bound'
-            nc.variables['latitude_bnd'].units = 'degrees_north'
-            nc.variables['latitude_bnd'].standard_name = 'latitude_bound'
-            nc.variables['latitude_bnd'][:] = lat_bnd
-
-            nc.createVariable('lsm', 'i2', ('lat', 'lon'), zlib=True)
-            nc.variables['lsm'].long_name = 'land_sea_mask'
-            nc.variables['lsm'].units = '1 = Land, 0 = Sea'
-            nc.variables['lsm'].standard_name = 'land_sea_mask'
-            nc.variables['lsm'][:] = lsm
-
-            nc.createVariable('coast', 'i2', ('lat', 'lon'), zlib=True)
-            nc.variables['coast'].long_name = 'coast_mask'
-            nc.variables['coast'].units = '1 = Coast, 0 = Not coast'
-            nc.variables['coast'].standard_name = 'coast_mask'
-            nc.variables['coast'][:] = coast
-
-            nc.createVariable('groups', 'i4', ('lat', 'lon'), zlib=True,
-                              fill_value=0)
-            nc.variables['groups'].long_name = 'groups'
-            nc.variables['groups'].units = '[XXX/YYY] XXX: group number, YYY: cell index'
-            nc.variables['groups'].standard_name = 'groups'
-            nc.variables['groups'][:] = groups
-
-    return coast, groups, lsm, lon, lat, lon_bnd, lat_bnd
+    return lsm_psi, coast_psi
 
 def cmems_globproc(model_fh, mask_fh):
     # This function takes output from global CMEMS GLORYS12V1 and generates
@@ -233,11 +90,13 @@ def cmems_globproc(model_fh, mask_fh):
         # Now generate the ('true') mask on the lat/lon (psi) grid:
         # A node on the psi grid is 'land' if all 4 surrounding nodes on the
         # rho grid are also land
-        lsm_psi = np.zeros((len(lat_psi), len(lon_psi)))
-        lsm_psi = psi_mask(lsm_rho, lsm_psi)
+        # Also generate the coast mask on the psi grid, defined as coast if
+        # 1, 2 or 3 surrounding nodes are land.
+        psi_grid = np.zeros((len(lat_psi), len(lon_psi)))
+        lsm_psi, coast_psi = psi_mask(lsm_rho, psi_grid)
 
         # Identify coast cells
-        coast_psi = id_coast(lsm_psi)  # Coast cells = 1
+        # coast_psi = id_coast(lsm_psi)  # Coast cells = 1
 
         # Save to netcdf
         with Dataset(mask_fh, mode='w') as nc:
