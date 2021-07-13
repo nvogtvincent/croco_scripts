@@ -5,17 +5,16 @@ This script grids plastic source fluxes onto the coastal grid
 @Author: Noam Vogt-Vincent
 """
 
-import gdal
 import numpy as np
 from netCDF4 import Dataset
 import matplotlib.pyplot as plt
 from scipy.ndimage import distance_transform_edt
-from scipy.interpolate import RegularGridInterpolator
 from skimage.measure import block_reduce
 import os.path
 import numba
 from numba.core import types
 from numba.typed import Dict
+from scipy.stats import mode
 
 ##############################################################################
 # Functions ##################################################################
@@ -106,6 +105,30 @@ def target_coords(nearest_cell, pop, pop_lon, pop_lat, lon, lat, efs):
 
     return coast_dist, coast_plastic
 
+@numba.jit(nopython=True)
+def id_coast_cells(coast, pop_id, nearest):
+    coast_id = np.copy(coast)
+    n_y = np.shape(coast_id)[0]
+    n_x = np.shape(coast_id)[1]
+
+    for i in range(n_y):
+        for j in range(n_x):
+            if coast[i, j] == 1:
+                # Firstly check if the coast already has a country ID
+                id0 = pop_id[i, j]
+
+                if id0 == 32767:
+                    iidx = pop_id_nearest[0, i, j]
+                    jidx = pop_id_nearest[1, i, j]
+                    id0 = pop_id[iidx, jidx]
+
+                coast_id[i, j] = id0
+
+    return coast_id
+
+
+
+
 
 ##############################################################################
 # Parameters #################################################################
@@ -114,6 +137,8 @@ def target_coords(nearest_cell, pop, pop_lon, pop_lat, lon, lat, efs):
 length_scale = 50.  # e-folding scale (lambda) for plastic (km)
 efs          = 1/length_scale
 
+cr           = 0.15 # proportion of mismanaged plastic waste generated in
+                    # coastal regions that enters the ocean
 
 ##############################################################################
 # File locations #############################################################
@@ -139,7 +164,7 @@ ci           = 10  # Index of country labels
 
 
 ##############################################################################
-# Grid coastal population ####################################################
+# Coastal plastics ###########################################################
 ##############################################################################
 
 # Methodology
@@ -166,92 +191,112 @@ with Dataset(grid_fh, mode='r') as nc:
     lsm     = nc.variables['lsm_psi'][:]
 
 # Load population data
-if os.path.isfile(pop_fh):
-    pass
-else:
-    with Dataset(pop_raw_fh, mode='r') as nc:
-        # Remove missing latitudes (CMEMS is for -80 to + 90)
-        # i.e. remove first 20*24 entries
-        pop_lon  = nc.variables['longitude'][:]
-        pop_lat  = np.flip(nc.variables['latitude'][:-10*24])
-        pop      = np.flip(nc.variables[pop_var][:nt, :-10*24, :], axis=1)
-        pop_id   = np.flip(nc.variables[pop_var][ci, :-10*24, :], axis=0)
+with Dataset(pop_raw_fh, mode='r') as nc:
+    # Remove missing latitudes (CMEMS is for -80 to + 90)
+    # i.e. remove first 20*24 entries
+    pop_lon  = nc.variables['longitude'][:]
+    pop_lat  = np.flip(nc.variables['latitude'][:-10*24])
+    pop      = np.flip(nc.variables[pop_var][:nt, :-10*24, :], axis=1)
+    pop_id   = np.flip(nc.variables[pop_var][ci, :-10*24, :], axis=0)
 
-    # 1. Calculate plastic fluxes
-    pdata = np.genfromtxt(jambeck_fh, delimiter=',', skip_header=True,
-                          usecols=3)
-    np.append(pdata, 0) # Add 0 flux for ocean
-    pdata = np.float32(pdata) # kg/person/day
+# 1. Calculate plastic fluxes
+pdata = np.genfromtxt(jambeck_fh, delimiter=',', skip_header=True,
+                      usecols=3)
+np.append(pdata, 0) # Add 0 flux for ocean
+pdata = np.float32(pdata) # kg/person/day
 
-    # ISO codes for countries
-    iso   = np.genfromtxt(jambeck_fh, delimiter=',', skip_header=True,
-                          usecols=2)
-    np.append(pdata, 32767) # Add 0 flux for ocean
-    iso   = np.int16(iso)
+# ISO codes for countries
+iso   = np.genfromtxt(jambeck_fh, delimiter=',', skip_header=True,
+                      usecols=2)
+np.append(pdata, 32767) # Add 0 flux for ocean
+iso   = np.int16(iso)
 
-    # Turn into typed numba dict
-    pflux = Dict.empty(key_type=types.int16,
-                        value_type=types.float32)
+# Turn into typed numba dict
+pflux = Dict.empty(key_type=types.int16,
+                    value_type=types.float32)
 
-    for i in range(len(pdata)):
-        pflux[iso[i]] = pdata[i]
+for i in range(len(pdata)):
+    pflux[iso[i]] = pdata[i]
 
-    # Now convert population to plastic flux
-    pop = plastic_conv(pop.filled(0), pop_id, pflux)
+# Now convert population to plastic flux
+pop = plastic_conv(pop.filled(0), pop_id, pflux)
 
-    # 2. Calculate nearest coastal cells
-    cell_dist, nearest_cell = distance_transform_edt(1-coast,
-                                                       return_indices=True)
+# 2. Calculate nearest coastal cells
+cell_dist, nearest_cell = distance_transform_edt(1-coast,
+                                                   return_indices=True)
 
-    # And expand to 1/24deg
-    lon, lat = np.meshgrid(lon, lat)
-    pop_lon, pop_lat = np.meshgrid(pop_lon, pop_lat)
-    target_lon = np.zeros_like(pop_lon)    # Seperate arrays for coordinates of
-                                           # target coastal cell
-    target_lat = np.zeros_like(pop_lat)
+# And expand to 1/24deg
+lon, lat = np.meshgrid(lon, lat)
+pop_lon, pop_lat = np.meshgrid(pop_lon, pop_lat)
+target_lon = np.zeros_like(pop_lon)    # Seperate arrays for coordinates of
+                                       # target coastal cell
+target_lat = np.zeros_like(pop_lat)
 
-    cell_dist = np.repeat(cell_dist, 2, axis=0)
-    cell_dist = np.repeat(cell_dist, 2, axis=1)
-    nearest_cell = np.repeat(nearest_cell, 2, axis=1)
-    nearest_cell = np.repeat(nearest_cell, 2, axis=2)
-    target_lon = np.repeat(target_lon, 2, axis=0)
-    target_lon = np.repeat(target_lon, 2, axis=1)
-    target_lat = np.repeat(target_lat, 2, axis=0)
-    target_lat = np.repeat(target_lat, 2, axis=1)
+cell_dist = np.repeat(cell_dist, 2, axis=0)
+cell_dist = np.repeat(cell_dist, 2, axis=1)
+nearest_cell = np.repeat(nearest_cell, 2, axis=1)
+nearest_cell = np.repeat(nearest_cell, 2, axis=2)
+target_lon = np.repeat(target_lon, 2, axis=0)
+target_lon = np.repeat(target_lon, 2, axis=1)
+target_lat = np.repeat(target_lat, 2, axis=0)
+target_lat = np.repeat(target_lat, 2, axis=1)
 
-    # 3. Calculate the distance of each waste flux cell to the nearest coastal
-    #    cell
-    # 4. Calculate the waste flux at each coastal cell (sum of weighted land cells)
+# 3. Calculate the distance of each waste flux cell to the nearest coastal
+#    cell
+# 4. Calculate the waste flux at each coastal cell (sum of weighted land cells)
 
-    coast_dist, coast_plastic = target_coords(nearest_cell, pop,
-                                              pop_lon, pop_lat,
-                                              lon, lat,
-                                              efs)
+coast_dist, coast_plastic = target_coords(nearest_cell, pop,
+                                          pop_lon, pop_lat,
+                                          lon, lat,
+                                          efs)
+# Include conversion rate and convert to metric tons
+coast_plastic *= cr/1000.
+
+##############################################################################
+# Label coastal cells ########################################################
+##############################################################################
+
+# Label coastal cells (coast) with their ISO country identifier
+# To do this, we we shrink the pop_id grid to the size of the CMEMS grid and
+# then calculate the nearest country_id to each grid cell without a country_id
+# A coastal cell with a country id takes that country id, otherwise it takes
+# the nearest country id
+
+pop_id_red = block_reduce(pop_id, (2,2), np.min) # min to avoid ocean attr.
+
+pop_id_lsm = np.copy(pop_id_red)
+pop_id_lsm[pop_id_lsm < 32767] = 0
+pop_id_lsm[pop_id_lsm > 0]     = 1
+
+pop_id_nearest = distance_transform_edt(pop_id_lsm,
+                                        return_distances=False,
+                                        return_indices=True)
+
+coast_id = id_coast_cells(coast, pop_id_red, pop_id_nearest)
 
 
+# f, a0 = plt.subplots(1, 1, figsize=(20, 10))
+# a0.imshow(np.flipud(coast_plastic[0, :, :]), vmax=1e3)
+# plt.savefig('test1.png', dpi=300)
 
-    f, a0 = plt.subplots(1, 1, figsize=(20, 10))
-    a0.imshow(np.flipud(coast_plastic[0, :, :]), vmax=1e3)
-    plt.savefig('test1.png', dpi=300)
+f, a0 = plt.subplots(1, 1, figsize=(20, 10))
+a0.imshow(np.flipud(coast_id))
+plt.savefig('test2.png', dpi=300)
 
-    f, a0 = plt.subplots(1, 1, figsize=(20, 10))
-    a0.imshow(np.flipud(coast))
-    plt.savefig('test2.png', dpi=300)
+# f, a0 = plt.subplots(1, 1, figsize=(20, 10))
+# lon = lon.flatten()
+# lat = lat.flatten()
+# coast_plastic = coast_plastic[0, :, :].flatten()
 
-    f, a0 = plt.subplots(1, 1, figsize=(20, 10))
-    lon = lon.flatten()
-    lat = lat.flatten()
-    coast_plastic = coast_plastic[0, :, :].flatten()
-
-    lon = np.delete(lon, (coast_plastic == 0))
-    lat = np.delete(lat, (coast_plastic == 0))
-    coast_plastic = np.delete(coast_plastic, (coast_plastic == 0))
+# lon = np.delete(lon, (coast_plastic == 0))
+# lat = np.delete(lat, (coast_plastic == 0))
+# coast_plastic = np.delete(coast_plastic, (coast_plastic == 0))
 
 
-    a0.scatter(lon, lat, s=coast_plastic/2e3, vmin=0, vmax=1)
+# a0.scatter(lon, lat, s=coast_plastic/2e3, vmin=0, vmax=1)
 
-    plt.savefig('test3.png', dpi=300)
+# plt.savefig('test3.png', dpi=300)
 
-    #cell_dist, nearest_cell = distance_transform_edt(pop_lsm, return_indices=True)
-    print('test)')
+# #cell_dist, nearest_cell = distance_transform_edt(pop_lsm, return_indices=True)
+# print('test)')
 
