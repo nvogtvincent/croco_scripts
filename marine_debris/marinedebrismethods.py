@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 from scipy import ndimage
 import os.path
 import numba
+from scipy.ndimage import distance_transform_edt
 
 @numba.jit(nopython=True)
 def psi_mask(lsm_rho, psi_grid):
@@ -51,6 +52,39 @@ def psi_mask(lsm_rho, psi_grid):
 
     return lsm_psi, coast_psi
 
+@numba.jit(nopython=True)
+def cnorm(lsm_rho):
+    # This function generates a vector field normal to the land-sea mask, at
+    # coastal rho points
+
+    cnormx = np.zeros_like(lsm_rho)
+    cnormy = np.zeros_like(lsm_rho)
+
+    for i in range(lsm_rho.shape[0]-2):
+        for j in range(lsm_rho.shape[1]-2):
+            if (i > 0)*(j > 0):
+                # Extract 3x3 stencil
+                block = lsm_rho[i-1:i+2, j-1:j+2]
+
+                # Check if coastal rho point (is land AND has >0 adj. ocean)
+                if (lsm_rho[i, j])*(np.sum(block) < 9):
+                    dx = block[1, 2] - block[1, 0]
+                    dy = block[2, 1] - block[0, 1]
+
+                    # If dx or dy are nonzero, it is not a diagonal coast cell
+                    if (np.abs(dx) + np.abs(dy) == 0):
+                        dxy = block[2, 2] - block[0, 0]
+                        dyx = block[2, 0] - block[0, 2]
+
+                        dx = dxy - dyx
+                        dy = dxy + dyx
+
+                    cnormx[i, j] = -dx
+                    cnormy[i, j] = -dy
+
+    return cnormx, cnormy
+
+
 def cmems_globproc(model_fh, mask_fh):
     # This function takes output from global CMEMS GLORYS12V1 and generates
     # Labelled coast cells
@@ -69,7 +103,10 @@ def cmems_globproc(model_fh, mask_fh):
                         'lon_rho': np.array(nc.variables['lon_rho'][:]),
                         'lon_psi': np.array(nc.variables['lon_psi'][:]),
                         'lat_rho': np.array(nc.variables['lat_rho'][:]),
-                        'lat_psi': np.array(nc.variables['lat_psi'][:])}
+                        'lat_psi': np.array(nc.variables['lat_psi'][:]),
+                        'cdist_rho': np.array(nc.variables['cdist_rho'][:]),
+                        'cnormx_rho': np.array(nc.variables['cnormx_rho'][:]),
+                        'cnormy_rho': np.array(nc.variables['cnormy_rho'][:])}
 
     else:
         with Dataset(model_fh, mode='r') as nc:
@@ -95,8 +132,11 @@ def cmems_globproc(model_fh, mask_fh):
         psi_grid = np.zeros((len(lat_psi), len(lon_psi)))
         lsm_psi, coast_psi = psi_mask(lsm_rho, psi_grid)
 
-        # Identify coast cells
-        # coast_psi = id_coast(lsm_psi)  # Coast cells = 1
+        # Now generate a rho grid with the distance to the coast
+        cdist_rho = distance_transform_edt(1-lsm_rho)
+
+        # Now generate vectors pointing away from the coast
+        cnormx, cnormy = cnorm(lsm_rho)
 
         # Save to netcdf
         with Dataset(mask_fh, mode='w') as nc:
@@ -142,6 +182,24 @@ def cmems_globproc(model_fh, mask_fh):
             nc.variables['lsm_rho'].standard_name = 'land_sea_mask_rho'
             nc.variables['lsm_rho'][:] = lsm_rho
 
+            nc.createVariable('cdist_rho', 'f4', ('lat_rho', 'lon_rho'), zlib=True)
+            nc.variables['cdist_rho'].long_name = 'distance_from_coast_rho_points'
+            nc.variables['cdist_rho'].units = 'grid_cells'
+            nc.variables['cdist_rho'].standard_name = 'cdist_rho'
+            nc.variables['cdist_rho'][:] = cdist_rho
+
+            nc.createVariable('cnormx_rho', 'f4', ('lat_rho', 'lon_rho'), zlib=True)
+            nc.variables['cnormx_rho'].long_name = 'normal_at_coast_rho_x_component'
+            nc.variables['cnormx_rho'].units = 'no units'
+            nc.variables['cnormx_rho'].standard_name = 'cnormx_rho'
+            nc.variables['cnormx_rho'][:] = cnormx
+
+            nc.createVariable('cnormy_rho', 'f4', ('lat_rho', 'lon_rho'), zlib=True)
+            nc.variables['cnormy_rho'].long_name = 'normal_at_coast_rho_y_component'
+            nc.variables['cnormy_rho'].units = 'no units'
+            nc.variables['cnormy_rho'].standard_name = 'cnormy_rho'
+            nc.variables['cnormy_rho'][:] = cnormy
+
             nc.createVariable('coast_psi', 'i2', ('lat_psi', 'lon_psi'), zlib=True)
             nc.variables['coast_psi'].long_name = 'coast_mask_on_psi_points'
             nc.variables['coast_psi'].units = '1 = Coast, 0 = Not coast'
@@ -154,7 +212,10 @@ def cmems_globproc(model_fh, mask_fh):
                         'lon_rho': np.array(nc.variables['lon_rho'][:]),
                         'lon_psi': np.array(nc.variables['lon_psi'][:]),
                         'lat_rho': np.array(nc.variables['lat_rho'][:]),
-                        'lat_psi': np.array(nc.variables['lat_psi'][:])}
+                        'lat_psi': np.array(nc.variables['lat_psi'][:]),
+                        'cdist_rho': np.array(nc.variables['cdist_rho'][:]),
+                        'cnormx_rho': np.array(nc.variables['cnormx_rho'][:]),
+                        'cnormy_rho': np.array(nc.variables['cnormy_rho'][:])}
 
     return contents
 

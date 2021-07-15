@@ -8,6 +8,7 @@ Script to test particle tracking on the CMEMS A-grid
 
 from parcels import FieldSet, ParticleSet, JITParticle, AdvectionRK4, ErrorCode
 from parcels import Variable, plotTrajectoriesFile, DiffusionUniformKh, Field
+from parcels import Geographic, GeographicPolar
 from netCDF4 import Dataset
 import numpy as np
 from datetime import timedelta
@@ -26,12 +27,35 @@ class debris(JITParticle):
                          dtype=np.int8,
                          initial=0)
 
-def beaching(particle, fieldset, time):
-    #  Recovery kernel to delete a particle if it is beached
-    particle.lsm_state = fieldset.lsm_psi[time, particle.depth, particle.lat, particle.lon]
+    cdist_state = Variable('cdist_state',
+                           dtype=np.float32,
+                           initial=0.)
 
-    if particle.lsm_state == 1:
-        particle.delete()
+    cnormx_state = Variable('cnormx_state',
+                            dtype=np.float32,
+                            initial=0.)
+
+    cnormy_state = Variable('cnormy_state',
+                            dtype=np.float32,
+                            initial=0.)
+
+# def beaching(particle, fieldset, time):
+#     #  Recovery kernel to delete a particle if it is beached
+#     particle.lsm_state = fieldset.lsm_psi[time, particle.depth, particle.lat, particle.lon]
+
+#     if particle.lsm_state == 1:
+#         particle.delete()
+
+def antibeach(particle, fieldset, time):
+    #  Recovery kernel to delete a particle if it is beached
+    particle.cdist_state = fieldset.cdist_rho[time, particle.depth, particle.lat, particle.lon]
+
+    if particle.cdist_state < 1:
+        particle.cnormx_state = fieldset.cnormx_rho[time, particle.depth, particle.lat, particle.lon]
+        particle.cnormy_state = fieldset.cnormy_rho[time, particle.depth, particle.lat, particle.lon]
+
+        particle.lon += particle.cnormx_state*particle.dt
+        particle.lat += particle.cnormy_state*particle.dt
 
 def deleteParticle(particle, fieldset, time):
     #  Recovery kernel to delete a particle if it leaves the domain
@@ -93,9 +117,14 @@ lsm_psi     = masks['lsm_psi']
 lsm_rho     = masks['lsm_rho']
 coast_psi   = masks['coast_psi']
 
+cnormx_rho  = masks['cnormx_rho']
+cnormy_rho  = masks['cnormy_rho']
+
 # Designate the source locations
 posx = np.linspace(lon_0, lon_1, num=pn)
 posy = np.linspace(lat_0, lat_1, num=pn)
+posx = np.array([139.])
+posy = np.array([34.8])
 post = np.zeros_like(posx)
 
 
@@ -130,6 +159,37 @@ lsm = Field.from_netcdf(cmems_proc_fh,
 
 fieldset.add_field(lsm)
 
+# Add the cdist and cnorm fields
+cdist = Field.from_netcdf(cmems_proc_fh,
+                          variable='cdist_rho',
+                          dimensions={'lon': 'lon_rho',
+                                      'lat': 'lat_rho'},
+                          interp_method='linear',
+                          allow_time_extrapolation=True)
+
+cnormx = Field.from_netcdf(cmems_proc_fh,
+                           variable='cnormx_rho',
+                           dimensions={'lon': 'lon_rho',
+                                       'lat': 'lat_rho'},
+                           interp_method='linear',
+                           mesh='spherical',
+                           allow_time_extrapolation=True)
+
+cnormy = Field.from_netcdf(cmems_proc_fh,
+                           variable='cnormy_rho',
+                           dimensions={'lon': 'lon_rho',
+                                       'lat': 'lat_rho'},
+                           interp_method='linear',
+                           mesh='spherical',
+                           allow_time_extrapolation=True)
+
+fieldset.add_field(cdist)
+fieldset.add_field(cnormx)
+fieldset.add_field(cnormy)
+
+fieldset.cnormx_rho.units = GeographicPolar()
+fieldset.cnormy_rho.units = Geographic()
+
 # Add diffusion
 fieldset.add_constant_field('Kh_zonal', Kh_zonal, mesh='spherical')
 fieldset.add_constant_field('Kh_meridional', Kh_meridional, mesh='spherical')
@@ -148,7 +208,7 @@ traj = pset.ParticleFile(name=traj_fh,
 
 kernels = (pset.Kernel(AdvectionRK4) +
            pset.Kernel(periodicBC) +
-           pset.Kernel(beaching))
+           pset.Kernel(antibeach))
 
 pset.execute(kernels,
              runtime=timedelta(days=sim_time),
@@ -192,6 +252,10 @@ with Dataset(cmems_fh, mode='r') as nc:
                                       imin_rho:imax_rho,
                                       jmin_rho:jmax_rho]
 
+cnormx   = cnormx_rho[imin_rho:imax_rho,jmin_rho:jmax_rho]
+
+cnormy   = cnormy_rho[imin_rho:imax_rho,jmin_rho:jmax_rho]
+
 # Plot the map
 f, ax = plt.subplots(1, 1, figsize=(10, 10))
 
@@ -223,12 +287,13 @@ ax.pcolormesh(disp_lon_rho, disp_lat_rho,
 ax.scatter(disp_lon_rho_, disp_lat_rho_, c=disp_lsm_rho, s=10, marker='o',
            cmap=cm.gray_r)
 
-# Plot the  lsm_psi nodes
+# # Plot the  lsm_psi nodes
 # ax.scatter(disp_lon_psi_, disp_lat_psi_, s=20, marker='+', c=disp_lsm_psi,
-#            cmap=cm.gray_r, linewidth=0.3)
+#             cmap=cm.gray_r, linewidth=0.3)
 
-# Plot the velocity field
+# Plot the velocity field and BCs
 ax.quiver(disp_lon_rho, disp_lat_rho, disp_u_rho, disp_v_rho)
+ax.quiver(disp_lon_rho, disp_lat_rho, cnormx, cnormy, units='inches', scale=5, color='w')
 
 # Load the trajectories
 with Dataset(traj_fh, mode='r') as nc:
