@@ -30,11 +30,19 @@ class debris(JITParticle):
                   dtype=np.float32,
                   initial=0.)
 
-    cu = Variable('cu',
+    uc = Variable('uc',
                   dtype=np.float32,
                   initial=0.)
 
-    cv = Variable('cv',
+    vc = Variable('vc',
+                  dtype=np.float32,
+                  initial=0.)
+
+    uo = Variable('uo',
+                  dtype=np.float32,
+                  initial=0.)
+
+    vo = Variable('vo',
                   dtype=np.float32,
                   initial=0.)
 
@@ -45,16 +53,27 @@ def beaching(particle, fieldset, time):
     if particle.lsm == 1:
         particle.delete()
 
-def antibeach(particle, fieldset, time):
+def antibeach2(particle, fieldset, time):
     #  Kernel to repel particles from the coast
     particle.cd = fieldset.cdist_rho[time, particle.depth, particle.lat, particle.lon]
 
     if particle.cd < 1:
-        particle.cu = fieldset.cnormx_rho[time, particle.depth, particle.lat, particle.lon]
-        particle.cv = fieldset.cnormy_rho[time, particle.depth, particle.lat, particle.lon]
+        particle.uc = fieldset.cnormx_rho[time, particle.depth, particle.lat, particle.lon]
+        particle.vc = fieldset.cnormy_rho[time, particle.depth, particle.lat, particle.lon]
 
-        particle.lon += particle.cu*particle.dt
-        particle.lat += particle.cv*particle.dt
+        particle.uo = fieldset.U[time, particle.depth, particle.lat, particle.lon]
+        particle.vo = fieldset.V[time, particle.depth, particle.lat, particle.lon]
+
+        particle.uc = 2. *((1 - particle.cd) *
+                       (particle.uo*particle.uc + particle.vo*particle.vc) *
+                       particle.uc)
+
+        particle.vc = 2. *((1 - particle.cd) *
+                       (particle.uo*particle.uc + particle.vo*particle.vc) *
+                       particle.vc)
+
+        particle.lon += particle.uc*particle.dt
+        particle.lat += particle.vc*particle.dt
 
 def deleteParticle(particle, fieldset, time):
     #  Recovery kernel to delete a particle if it leaves the domain
@@ -87,7 +106,7 @@ traj_fh = trajectory_dir + '/land_test.nc'
 pn = 50
 
 # Simulation length
-sim_time = 5 # days
+sim_time = 2 # days
 
 # Bounds for release zone (linear)
 (lon_0, lon_1, lat_0, lat_1) = (139.75, 139.75, 34.85, 35.5)
@@ -97,7 +116,8 @@ sim_time = 5 # days
 # Kh_zonal      = 1.
 
 # Display region
-(lon_min, lon_max, lat_min, lat_max) = (139, 141, 34, 36)
+# (lon_min, lon_max, lat_min, lat_max) = (139, 141, 34, 36)
+(lon_min, lon_max, lat_min, lat_max) = (139.8, 140.1, 34.95, 35.25)
 fig_fh = 'flow_test.png'
 
 ##############################################################################
@@ -122,6 +142,8 @@ cnormy_rho  = masks['cnormy_rho']
 # Designate the source locations
 posx = np.linspace(lon_0, lon_1, num=pn)
 posy = np.linspace(lat_0, lat_1, num=pn)
+posx = np.array([139.85])
+posy = np.array([35.05])
 post = np.zeros_like(posx)
 
 
@@ -205,7 +227,7 @@ traj = pset.ParticleFile(name=traj_fh,
 
 kernels = (pset.Kernel(AdvectionRK4) +
            pset.Kernel(periodicBC) +
-           pset.Kernel(antibeach) +
+           pset.Kernel(antibeach2) +
            pset.Kernel(beaching))
 
 pset.execute(kernels,
@@ -291,7 +313,7 @@ ax.scatter(disp_lon_rho_, disp_lat_rho_, c=disp_lsm_rho, s=10, marker='o',
 
 # Plot the velocity field and BCs
 ax.quiver(disp_lon_rho, disp_lat_rho, disp_u_rho, disp_v_rho)
-ax.quiver(disp_lon_rho, disp_lat_rho, cnormx, cnormy, units='inches', scale=5, color='w')
+ax.quiver(disp_lon_rho, disp_lat_rho, cnormx, cnormy, units='inches', scale=3, color='w')
 
 # Load the trajectories
 with Dataset(traj_fh, mode='r') as nc:

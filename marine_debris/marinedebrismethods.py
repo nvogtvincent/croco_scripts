@@ -57,8 +57,10 @@ def cnorm(lsm_rho):
     # This function generates a vector field normal to the land-sea mask, at
     # coastal rho points
 
-    cnormx = np.zeros_like(lsm_rho)
-    cnormy = np.zeros_like(lsm_rho)
+    cnormx = np.zeros_like(lsm_rho, dtype=np.float32)
+    cnormy = np.zeros_like(lsm_rho, dtype=np.float32)
+
+    cf = 1/np.sqrt(2)
 
     for i in range(lsm_rho.shape[0]-2):
         for j in range(lsm_rho.shape[1]-2):
@@ -76,11 +78,15 @@ def cnorm(lsm_rho):
                         dxy = block[2, 2] - block[0, 0]
                         dyx = block[2, 0] - block[0, 2]
 
-                        dx = dxy - dyx
-                        dy = dxy + dyx
+                        dx = (dxy - dyx)
+                        dy = (dxy + dyx)
 
-                    cnormx[i, j] = -dx
-                    cnormy[i, j] = -dy
+                    # Normalise
+                    mag = np.sqrt(dx**2 + dy**2)
+
+                    if mag != 0:
+                        cnormx[i, j] = -dx/mag
+                        cnormy[i, j] = -dy/mag
 
     return cnormx, cnormy
 
