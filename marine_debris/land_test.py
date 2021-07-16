@@ -7,7 +7,7 @@ Script to test particle tracking on the CMEMS A-grid
 """
 
 from parcels import FieldSet, ParticleSet, JITParticle, AdvectionRK4, ErrorCode
-from parcels import Variable, plotTrajectoriesFile, DiffusionUniformKh, Field
+from parcels import Variable, plotTrajectoriesFile, Field
 from parcels import Geographic, GeographicPolar
 from netCDF4 import Dataset
 import numpy as np
@@ -22,40 +22,39 @@ import cmocean.cm as cm
 ##############################################################################
 
 class debris(JITParticle):
-    # Source cell is defined at particle initiation and is the origin reef cell
-    lsm_state = Variable('lsm_state',
-                         dtype=np.int8,
-                         initial=0)
+    lsm = Variable('lsm',
+                   dtype=np.int8,
+                   initial=0)
 
-    cdist_state = Variable('cdist_state',
-                           dtype=np.float32,
-                           initial=0.)
+    cd = Variable('cd',
+                  dtype=np.float32,
+                  initial=0.)
 
-    cnormx_state = Variable('cnormx_state',
-                            dtype=np.float32,
-                            initial=0.)
+    cu = Variable('cu',
+                  dtype=np.float32,
+                  initial=0.)
 
-    cnormy_state = Variable('cnormy_state',
-                            dtype=np.float32,
-                            initial=0.)
+    cv = Variable('cv',
+                  dtype=np.float32,
+                  initial=0.)
 
-# def beaching(particle, fieldset, time):
-#     #  Recovery kernel to delete a particle if it is beached
-#     particle.lsm_state = fieldset.lsm_psi[time, particle.depth, particle.lat, particle.lon]
+def beaching(particle, fieldset, time):
+    #  Recovery kernel to delete a particle if it is beached
+    particle.lsm = fieldset.lsm_psi[time, particle.depth, particle.lat, particle.lon]
 
-#     if particle.lsm_state == 1:
-#         particle.delete()
+    if particle.lsm == 1:
+        particle.delete()
 
 def antibeach(particle, fieldset, time):
-    #  Recovery kernel to delete a particle if it is beached
-    particle.cdist_state = fieldset.cdist_rho[time, particle.depth, particle.lat, particle.lon]
+    #  Kernel to repel particles from the coast
+    particle.cd = fieldset.cdist_rho[time, particle.depth, particle.lat, particle.lon]
 
-    if particle.cdist_state < 1:
-        particle.cnormx_state = fieldset.cnormx_rho[time, particle.depth, particle.lat, particle.lon]
-        particle.cnormy_state = fieldset.cnormy_rho[time, particle.depth, particle.lat, particle.lon]
+    if particle.cd < 1:
+        particle.cu = fieldset.cnormx_rho[time, particle.depth, particle.lat, particle.lon]
+        particle.cv = fieldset.cnormy_rho[time, particle.depth, particle.lat, particle.lon]
 
-        particle.lon += particle.cnormx_state*particle.dt
-        particle.lat += particle.cnormy_state*particle.dt
+        particle.lon += particle.cu*particle.dt
+        particle.lat += particle.cv*particle.dt
 
 def deleteParticle(particle, fieldset, time):
     #  Recovery kernel to delete a particle if it leaves the domain
@@ -88,14 +87,14 @@ traj_fh = trajectory_dir + '/land_test.nc'
 pn = 50
 
 # Simulation length
-sim_time = 1.5 # days
+sim_time = 5 # days
 
 # Bounds for release zone (linear)
-(lon_0, lon_1, lat_0, lat_1) = (139.0, 139.0, 34.0, 35.00)
+(lon_0, lon_1, lat_0, lat_1) = (139.75, 139.75, 34.85, 35.5)
 
 # Diffusion parameters
-Kh_meridional = 1.
-Kh_zonal      = 1.
+# Kh_meridional = 1.
+# Kh_zonal      = 1.
 
 # Display region
 (lon_min, lon_max, lat_min, lat_max) = (139, 141, 34, 36)
@@ -123,8 +122,6 @@ cnormy_rho  = masks['cnormy_rho']
 # Designate the source locations
 posx = np.linspace(lon_0, lon_1, num=pn)
 posy = np.linspace(lat_0, lat_1, num=pn)
-posx = np.array([139.])
-posy = np.array([34.8])
 post = np.zeros_like(posx)
 
 
@@ -191,8 +188,8 @@ fieldset.cnormx_rho.units = GeographicPolar()
 fieldset.cnormy_rho.units = Geographic()
 
 # Add diffusion
-fieldset.add_constant_field('Kh_zonal', Kh_zonal, mesh='spherical')
-fieldset.add_constant_field('Kh_meridional', Kh_meridional, mesh='spherical')
+# fieldset.add_constant_field('Kh_zonal', Kh_zonal, mesh='spherical')
+# fieldset.add_constant_field('Kh_meridional', Kh_meridional, mesh='spherical')
 
 # Set up the particle set
 pset = ParticleSet.from_list(fieldset=fieldset,
@@ -208,7 +205,8 @@ traj = pset.ParticleFile(name=traj_fh,
 
 kernels = (pset.Kernel(AdvectionRK4) +
            pset.Kernel(periodicBC) +
-           pset.Kernel(antibeach))
+           pset.Kernel(antibeach) +
+           pset.Kernel(beaching))
 
 pset.execute(kernels,
              runtime=timedelta(days=sim_time),
@@ -299,7 +297,7 @@ ax.quiver(disp_lon_rho, disp_lat_rho, cnormx, cnormy, units='inches', scale=5, c
 with Dataset(traj_fh, mode='r') as nc:
     plat  = nc.variables['lat'][:]
     plon  = nc.variables['lon'][:]
-    pstate = nc.variables['lsm_state'][:]
+    pstate = nc.variables['lsm'][:]
 
 pnum = np.shape(plat)[0]
 pt   = np.shape(plat)[1]
