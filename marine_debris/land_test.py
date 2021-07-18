@@ -10,6 +10,7 @@ from parcels import FieldSet, ParticleSet, JITParticle, AdvectionRK4, ErrorCode
 from parcels import Variable, plotTrajectoriesFile, Field
 from parcels import Geographic, GeographicPolar
 from netCDF4 import Dataset
+import math
 import numpy as np
 from datetime import timedelta
 import os
@@ -53,7 +54,8 @@ def beaching(particle, fieldset, time):
     if particle.lsm == 1:
         particle.delete()
 
-def antibeach2(particle, fieldset, time):
+
+def antibeach1(particle, fieldset, time):
     #  Kernel to repel particles from the coast
     particle.cd = fieldset.cdist_rho[time, particle.depth, particle.lat, particle.lon]
 
@@ -64,16 +66,40 @@ def antibeach2(particle, fieldset, time):
         particle.uo = fieldset.U[time, particle.depth, particle.lat, particle.lon]
         particle.vo = fieldset.V[time, particle.depth, particle.lat, particle.lon]
 
-        particle.uc = 2. *((1 - particle.cd) *
-                       (particle.uo*particle.uc + particle.vo*particle.vc) *
-                       particle.uc)
+        particle.uo = (-20*(particle.uo*particle.uc + particle.vo*particle.vc)
+                       *particle.uc)
 
-        particle.vc = 2. *((1 - particle.cd) *
-                       (particle.uo*particle.uc + particle.vo*particle.vc) *
-                       particle.vc)
+        particle.vo = (-20*(particle.uo*particle.uc + particle.vo*particle.vc)
+                       *particle.vc)
+
+        particle.lon += particle.uo*particle.dt
+        particle.lat += particle.vo*particle.dt
+
+def antibeach2(particle, fieldset, time):
+    #  Kernel to repel particles from the coast
+    particle.cd = fieldset.cdist_rho[time, particle.depth, particle.lat, particle.lon]
+
+    if particle.cd < 0.5:
+        particle.uc = fieldset.cnormx_rho[time, particle.depth, particle.lat, particle.lon]
+        particle.vc = fieldset.cnormy_rho[time, particle.depth, particle.lat, particle.lon]
 
         particle.lon += particle.uc*particle.dt
         particle.lat += particle.vc*particle.dt
+
+def antibeach3(particle, fieldset, time):
+    #  Kernel to repel particles from the coast
+    particle.cd = fieldset.cdist_rho[time, particle.depth, particle.lat, particle.lon]
+
+    if particle.cd < 0.5:
+
+        particle.uc = fieldset.cnormx_rho[time, particle.depth, particle.lat, particle.lon]
+        particle.vc = fieldset.cnormy_rho[time, particle.depth, particle.lat, particle.lon]
+
+        particle.uc *= (particle.cd - 0.5)**2
+        particle.vc *= (particle.cd - 0.5)**2
+
+        particle.lon += 1*particle.uc*particle.dt
+        particle.lat += 1*particle.vc*particle.dt
 
 def deleteParticle(particle, fieldset, time):
     #  Recovery kernel to delete a particle if it leaves the domain
@@ -94,7 +120,8 @@ script_dir = os.path.dirname(os.path.realpath(__file__))
 model_dir = script_dir + '/CMEMS/'
 trajectory_dir = script_dir + '/TRAJ/'
 
-cmems_fh = model_dir + 'CMEMS_1993.nc'
+cmems_fh = model_dir + 'OCEAN_1993.nc'
+wave_fh = model_dir + 'WAVE_1993.nc'
 cmems_proc_fh = model_dir + 'globmask.nc'
 traj_fh = trajectory_dir + '/land_test.nc'
 
@@ -103,21 +130,24 @@ traj_fh = trajectory_dir + '/land_test.nc'
 ##############################################################################
 
 # The number of particles to be seeded per cell = pn^2
-pn = 50
+pn = 10
 
 # Simulation length
-sim_time = 2 # days
+sim_time = 8 # days
 
 # Bounds for release zone (linear)
-(lon_0, lon_1, lat_0, lat_1) = (139.75, 139.75, 34.85, 35.5)
+# (lon_0, lon_1, lat_0, lat_1) = (139.6, 139.6, 34.5, 35.5)
+# (lon_0, lon_1, lat_0, lat_1) = (46.4, 46.4, -9.9, -8.9)
+(lon_0, lon_1, lat_0, lat_1) = (179.5, 179.5, -7, -5)
 
 # Diffusion parameters
 # Kh_meridional = 1.
 # Kh_zonal      = 1.
 
 # Display region
-# (lon_min, lon_max, lat_min, lat_max) = (139, 141, 34, 36)
-(lon_min, lon_max, lat_min, lat_max) = (139.8, 140.1, 34.95, 35.25)
+# (lon_min, lon_max, lat_min, lat_max) = (139, 140.5, 34.5, 36)
+# (lon_min, lon_max, lat_min, lat_max) = (45.9, 46.9, -9.9, -8.9)
+(lon_min, lon_max, lat_min, lat_max) = (178, 180, -7, -5)
 fig_fh = 'flow_test.png'
 
 ##############################################################################
@@ -139,34 +169,46 @@ coast_psi   = masks['coast_psi']
 cnormx_rho  = masks['cnormx_rho']
 cnormy_rho  = masks['cnormy_rho']
 
+cdist_rho   = masks['cdist_rho']
+
 # Designate the source locations
 posx = np.linspace(lon_0, lon_1, num=pn)
 posy = np.linspace(lat_0, lat_1, num=pn)
-posx = np.array([139.85])
-posy = np.array([35.05])
 post = np.zeros_like(posx)
 
 
-# Set up the fieldset
+# Set up the fieldsets
+# Ocean
 filenames = {'U': {'lon': cmems_fh, 'lat': cmems_fh,
-                   'time': cmems_fh, 'data': cmems_fh},
-             'V': {'lon': cmems_fh, 'lat': cmems_fh,
-                   'time': cmems_fh, 'data': cmems_fh}}
+                    'time': cmems_fh, 'data': cmems_fh},
+              'V': {'lon': cmems_fh, 'lat': cmems_fh,
+                    'time': cmems_fh, 'data': cmems_fh}}
 
 variables = {'U': 'uo',
-             'V': 'vo'}
+              'V': 'vo'}
 
 dimensions = {'U': {'lon': 'longitude', 'lat': 'latitude', 'time': 'time'},
               'V': {'lon': 'longitude', 'lat': 'latitude', 'time': 'time'}}
 
-fieldset = FieldSet.from_netcdf(filenames,
-                                variables,
-                                dimensions)
+fieldset_ocean = FieldSet.from_netcdf(filenames, variables, dimensions)
 
-# Add the periodic boundary
-fieldset.add_constant('halo_west', fieldset.U.grid.lon[0])
-fieldset.add_constant('halo_east', fieldset.U.grid.lon[-1])
-fieldset.add_periodic_halo(zonal=True)
+# Stokes
+filenames = {'U': {'lon': wave_fh, 'lat': wave_fh,
+                   'time': wave_fh, 'data': wave_fh},
+             'V': {'lon': wave_fh, 'lat': wave_fh,
+                   'time': wave_fh, 'data': wave_fh}}
+
+variables = {'U': 'VSDX',
+             'V': 'VSDY'}
+
+dimensions = {'U': {'lon': 'longitude', 'lat': 'latitude', 'time': 'time'},
+              'V': {'lon': 'longitude', 'lat': 'latitude', 'time': 'time'}}
+
+fieldset_stokes = FieldSet.from_netcdf(filenames, variables, dimensions)
+
+fieldset = FieldSet(U=fieldset_ocean.U+fieldset_stokes.U,
+                    V=fieldset_ocean.V+fieldset_stokes.V)
+# fieldset = fieldset_stokes
 
 # Add the groups field (and implicitly the coast)
 lsm = Field.from_netcdf(cmems_proc_fh,
@@ -209,6 +251,11 @@ fieldset.add_field(cnormy)
 fieldset.cnormx_rho.units = GeographicPolar()
 fieldset.cnormy_rho.units = Geographic()
 
+# Add the periodic boundary
+fieldset.add_constant('halo_west', -180.)
+fieldset.add_constant('halo_east', 180.)
+fieldset.add_periodic_halo(zonal=True)
+
 # Add diffusion
 # fieldset.add_constant_field('Kh_zonal', Kh_zonal, mesh='spherical')
 # fieldset.add_constant_field('Kh_meridional', Kh_meridional, mesh='spherical')
@@ -226,9 +273,9 @@ traj = pset.ParticleFile(name=traj_fh,
                          outputdt=timedelta(minutes=60))
 
 kernels = (pset.Kernel(AdvectionRK4) +
-           pset.Kernel(periodicBC) +
-           pset.Kernel(antibeach2) +
-           pset.Kernel(beaching))
+           pset.Kernel(antibeach3) +
+           pset.Kernel(beaching) +
+           pset.Kernel(periodicBC))
 
 pset.execute(kernels,
              runtime=timedelta(days=sim_time),
@@ -244,6 +291,8 @@ traj.export()
 
 # Calculate grid indices for graphing
 jmin_psi = np.searchsorted(lon_psi, lon_min) - 1
+if jmin_psi < 0:
+    jmin_psi = 0
 jmin_rho = jmin_psi
 jmax_psi = np.searchsorted(lon_psi, lon_max)
 jmax_rho = jmax_psi + 1
@@ -261,7 +310,9 @@ disp_lat_psi = lat_psi[imin_psi:imax_psi]
 
 disp_lsm_psi   = lsm_psi[imin_psi:imax_psi, jmin_psi:jmax_psi]
 disp_lsm_rho   = lsm_rho[imin_rho:imax_rho, jmin_rho:jmax_rho]
+
 disp_coast_psi = coast_psi[imin_psi:imax_psi, jmin_psi:jmax_psi]
+disp_cdist_rho = cdist_rho[imin_rho:imax_rho, jmin_rho:jmax_rho]
 
 with Dataset(cmems_fh, mode='r') as nc:
     disp_u_rho   = nc.variables['uo'][0, 0,
@@ -273,7 +324,6 @@ with Dataset(cmems_fh, mode='r') as nc:
                                       jmin_rho:jmax_rho]
 
 cnormx   = cnormx_rho[imin_rho:imax_rho,jmin_rho:jmax_rho]
-
 cnormy   = cnormy_rho[imin_rho:imax_rho,jmin_rho:jmax_rho]
 
 # Plot the map
