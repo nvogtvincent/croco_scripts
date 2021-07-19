@@ -127,7 +127,7 @@ id_fh      = data_dir + 'gpw_v4_national_identifier_grid_rev11_30_sec.tif'
 river_fh   = data_dir + 'Meijer2021_midpoint_emissions.zip'
 
 # Output netcdf fh
-out_fh     = script_dir + 'plastic_flux.nc'
+out_fh     = grid_dir + 'plastic_flux.nc'
 
 ##############################################################################
 # Coastal plastics ###########################################################
