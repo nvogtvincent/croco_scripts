@@ -35,20 +35,20 @@ fh = {'ocean': dirs['model'] + 'OCEAN_1993.nc',
 
 # Release timing
 Years  = [1993, 1993]  # Minimum and maximum release year
-Months = [1, 1]        # Minimum and maximum release month
+Months = [2, 11]        # Minimum and maximum release month
 RPM    = 1             # Particle releases per calender month
 
 # Release locations
 CountryIDs = [690]     # ISO country codes for starting locations
-PN         = 3         # Sqrt of number of particles per cell (must be even!)
+PN         = 8       # Sqrt of number of particles per cell (must be even!)
 
 # Runtime parameters
-sim_T      = timedelta(days=5)
+sim_T      = timedelta(days=30*10)
 sim_dt     = timedelta(minutes=-5)
 out_dt     = timedelta(hours=1)
 
 # Debug/Checking tools
-debug      = True
+debug      = False
 viz_lim    = {'lonW': 46,
               'lonE': 47,
               'latS': -10,
@@ -78,11 +78,19 @@ pos0 = mdm.release_loc(fh, CountryIDs, PN)
 
 # Add the times
 pos0 = mdm.add_times(pos0, rtime)
-print()
 
 ##############################################################################
 # SET UP FIELDSETS                                                           #
 ##############################################################################
+
+# Chunksize for parallel execution
+cs_OCEAN = {'time': ('time', 2),
+            'lat': ('lat', 2048),
+            'lon': ('lon', 2048)}
+
+cs_WAVE  = {'time': ('time', 2),
+            'lat': ('lat', 2048),
+            'lon': ('lon', 2048)}
 
 # OCEAN (CMEMS GLORYS12V1)
 filenames = {'U': {'lon': fh['ocean'], 'lat': fh['ocean'],
@@ -96,7 +104,8 @@ variables = {'U': 'uo',
 dimensions = {'U': {'lon': 'longitude', 'lat': 'latitude', 'time': 'time'},
               'V': {'lon': 'longitude', 'lat': 'latitude', 'time': 'time'}}
 
-fieldset_ocean = FieldSet.from_netcdf(filenames, variables, dimensions)
+fieldset_ocean = FieldSet.from_netcdf(filenames, variables, dimensions,
+                                      chunksize=cs_OCEAN)
 
 # WAVE (STOKES FROM WAVERYS W/ GLORYS12V1)
 filenames = {'U': {'lon': fh['wave'], 'lat': fh['wave'],
@@ -110,10 +119,12 @@ variables = {'U': 'VSDX',
 dimensions = {'U': {'lon': 'longitude', 'lat': 'latitude', 'time': 'time'},
               'V': {'lon': 'longitude', 'lat': 'latitude', 'time': 'time'}}
 
-fieldset_wave = FieldSet.from_netcdf(filenames, variables, dimensions)
+fieldset_wave = FieldSet.from_netcdf(filenames, variables, dimensions,
+                                     chunksize=cs_WAVE)
 
 fieldset = FieldSet(U=fieldset_ocean.U+fieldset_wave.U,
                     V=fieldset_ocean.V+fieldset_wave.V)
+
 
 # ADD THE LSM, ID, CDIST, AND CNORM FIELDS
 lsm   = Field.from_netcdf(fh['grid'],
@@ -175,25 +186,25 @@ class debris(JITParticle):
     # Land-sea mask (if particle has beached)
     lsm = Variable('lsm',
                    dtype=np.int8,
-                   initial=fieldset.lsm_psi,
+                   initial=0,
                    to_write=False)
 
     # Source ID
-    sid = Variable('sid',
-                   dtype=np.int32,
-                   initial=fieldset.id_psi,
-                   to_write='once')
+    # sid = Variable('sid',
+    #                dtype=np.int32,
+    #                initial=fieldset.id_psi,
+    #                to_write='once')
 
     # Particle distance from land
     cd = Variable('cd',
                   dtype=np.float32,
-                  initial=fieldset.cdist_rho,
+                  initial=0.,
                   to_write=False)
 
     # Time at sea (ocean time)
     ot = Variable('ot',
                   dtype=np.int32,
-                  initial=fieldset.cdist_rho,
+                  initial=0,
                   to_write=False)
 
     # Velocity away from coast (to prevent beaching)
@@ -412,4 +423,4 @@ if debug:
         #            marker = 's')
 
     # Save
-    plt.savefig(dirs['script'] + 'test.png', dpi=300)
+    plt.savefig(dirs['script'] + '/test.png', dpi=300)
