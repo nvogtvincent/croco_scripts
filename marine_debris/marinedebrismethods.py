@@ -97,9 +97,20 @@ def cnorm(lsm_rho):
 
     return cnormx, cnormy
 
-def release_time(Years, Months, RPM, t0):
+def release_time(Years, Months, RPM, t0, **kwargs):
     # Generate a list of release times in seconds from the start of the model
     # data
+
+    try:
+        if kwargs['mode'] == 'start':
+            start_mode = True
+            print('Releasing at start of month...')
+        else:
+            start_mode = False
+            print('Releasing at end of month...')
+    except:
+        start_mode = True
+        print('Releasing at end of month...')
 
     Years = np.arange(Years[0], Years[1]+1)
     nyears = Years.shape[0]
@@ -117,7 +128,11 @@ def release_time(Years, Months, RPM, t0):
         for mi in range(m0, m1+1):
             # Calculate release days in month
             days = monthrange(Years[yi], mi)[-1]
-            daysi = np.linspace(0, days, num=RPM+1)[:-1]
+
+            if start_mode:
+                daysi = np.linspace(0, days, num=RPM+1)[:-1]
+            else:
+                daysi = np.linspace(0, days, num=RPM+1)[1:]
 
             time[pos*RPM:(pos+1)*RPM] = daysi*86400 + cumtime
 
@@ -251,7 +266,23 @@ def release_loc(fh, ids, pn):
 
     return pos0
 
-def cmems_globproc(model_fh, mask_fh):
+def add_times(data, times):
+    # This script takes release locations at a particular time point and
+    # duplicates it across multiple times
+
+    ntimes = times.shape[0]
+    npart  = data['lon'].shape[0]
+
+    data['lon']  = np.tile(data['lon'], ntimes)
+    data['lat']  = np.tile(data['lat'], ntimes)
+    data['iso']  = np.tile(data['iso'], ntimes)
+    data['id']   = np.tile(data['id'], ntimes)
+    data['time'] = np.repeat(times, npart)
+
+    return data
+
+
+def cmems_globproc(model_fh, mask_fh, **kwargs):
     # This function takes output from global CMEMS GLORYS12V1 and generates
     # Labelled coast cells
     # A land mask
@@ -298,6 +329,51 @@ def cmems_globproc(model_fh, mask_fh):
         # 1, 2 or 3 surrounding nodes are land.
         psi_grid = np.zeros((len(lat_psi), len(lon_psi)))
         lsm_psi, coast_psi, id_psi = psi_mask(lsm_rho, psi_grid)
+
+        # Now add the custom coast tiles for Seychelles if applicable
+        try:
+            add_sey = True if kwargs['add_seychelles'] == True else False
+        except:
+            add_sey = False
+
+        if add_sey:
+            print('Seychelles extra islands added.')
+            island_loc = np.array([[-3.805, 55.667], # Denis
+                                   [-3.720, 55.206], # Bird
+                                   [-5.758, 53.307], # Poivre
+                                   [-7.021, 52.737], # Alphonse
+                                   [-9.225, 51.050], # Providence
+                                   [-9.275, 51.050],
+                                   [-9.325, 51.050],
+                                   [-9.375, 51.050],
+                                   [-9.425, 51.050],
+                                   [-9.475, 51.050],
+                                   [-9.475, 51.050]
+                                   ])
+
+            island_loc = np.histogram2d(island_loc[:, 0],
+                                        island_loc[:, 1],
+                                        bins=[lat_rho,
+                                              np.append(lon_rho, 180)])[0]
+            island_loc = island_loc.astype('int8')
+            island_loc[island_loc > 1] = 1
+
+            # Check there are no shared cells
+            if np.sum(island_loc*coast_psi) > 0:
+                raise ValueError('Added islands overlap with existing LSM')
+
+            # Add island IDs
+            # island_loc = np.where(island_loc > 0)
+            # island_id  = np.zeros_like(island_loc, dtype=np.int32)
+
+            # for island in range(len(island_loc[0])):
+            #     i = island_loc[0][island]
+            #     j = island_loc[1][island]
+
+            #     island_id[i, j] = 10000*i + j
+
+            coast_psi += island_loc
+            # id_psi    += island_id
 
         # Now generate a rho grid with the distance to the coast
         cdist_rho = distance_transform_edt(1-lsm_rho)
