@@ -26,9 +26,11 @@ dirs = {'script': os.path.dirname(os.path.realpath(__file__)),
         'traj': os.path.dirname(os.path.realpath(__file__)) + '/TRAJ/'}
 
 fh = {'ocean':   sorted(glob(dirs['model'] + 'OCEAN_*.nc')),
+      'wave':    sorted(glob(dirs['model'] + 'WAVE_*.nc')),
       'grid':    dirs['grid'] + 'globmask.nc',
       'plastic': dirs['grid'] + 'plastic_flux.nc',
-      'traj':    dirs['traj'] + 'backtrack_test.nc'}
+      'traj':    dirs['traj'] + 'backtrack_test.nc',
+      'sid':     dirs['traj'] + 'sid.nc'}
 
 ##############################################################################
 # PARAMETERS                                                                 #
@@ -42,12 +44,15 @@ mode   = 'end'         # Release at start or end of month
 
 # Release locations
 CountryIDs = [690]     # ISO country codes for starting locations
-PN         = 2       # Sqrt of number of particles per cell (must be even!)
+PN         = 2         # Sqrt of number of particles per cell (must be even!)
 
 # Runtime parameters
 sim_T      = timedelta(days=2)
 sim_dt     = timedelta(minutes=-15)
 out_dt     = timedelta(hours=1)
+
+# Diagnosis mode
+diag_mode  = 'BOTH'   # Choose 'OCEAN', 'WAVE', or 'BOTH'
 
 ##############################################################################
 # SET UP PARTICLE RELEASE                                                    #
@@ -74,9 +79,9 @@ pos0 = mdm.add_times(pos0, rtime)
 ##############################################################################
 
 # Chunksize for parallel execution
-cs_OCEAN = {'time': ('time', 2),
-            'lat': ('latitude', 512),
-            'lon': ('longitude', 512)}
+cs = {'time': ('time', 2),
+      'lat': ('latitude', 512),
+      'lon': ('longitude', 512)}
 
 # OCEAN (CMEMS GLORYS12V1)
 filenames = fh['ocean']
@@ -87,12 +92,26 @@ variables = {'U': 'uo',
 dimensions = {'U': {'lon': 'longitude', 'lat': 'latitude', 'time': 'time'},
               'V': {'lon': 'longitude', 'lat': 'latitude', 'time': 'time'}}
 
-fieldset = FieldSet.from_netcdf(filenames, variables, dimensions, chunksize=cs_OCEAN)
+fieldset_ocean = FieldSet.from_netcdf(filenames, variables, dimensions, chunksize=cs)
 
-##############################################################################
-# KERNELS                                                                    #
-##############################################################################
+# OCEAN (CMEMS WAVERYS)
+filenames = fh['wave']
 
+variables = {'U': 'VSDX',
+              'V': 'VSDY'}
+
+dimensions = {'U': {'lon': 'longitude', 'lat': 'latitude', 'time': 'time'},
+              'V': {'lon': 'longitude', 'lat': 'latitude', 'time': 'time'}}
+
+fieldset_wave = FieldSet.from_netcdf(filenames, variables, dimensions, chunksize=cs)
+
+if diag_mode == 'BOTH':
+    fieldset = FieldSet(U=fieldset_ocean.U+fieldset_wave.U,
+                        V=fieldset_ocean.V+fieldset_wave.V)
+elif diag_mode == 'OCEAN':
+    fieldset = fieldset_ocean
+elif diag_mode == 'WAVE':
+    fieldset = fieldset_wave
 
 ##############################################################################
 # INITIALISE SIMULATION AND RUN                                              #
@@ -116,4 +135,3 @@ pset.execute(kernels,
              output_file=traj)
 
 traj.export()
-
