@@ -6,11 +6,87 @@ Methods to set up a marine debris simulation using CMEMS data
 """
 
 import numpy as np
-from netCDF4 import Dataset
-from calendar import monthrange
 import os.path
 import numba
+import geopandas as gpd
+from netCDF4 import Dataset
+from calendar import monthrange
 from scipy.ndimage import distance_transform_edt
+from skimage.measure import block_reduce
+from datetime import datetime
+from osgeo import gdal
+
+@numba.jit(nopython=True)
+def haversine_np(lon1, lat1, lon2, lat2):
+    # From https://stackoverflow.com/questions/29545704/fast-haversine-approximation-python-pandas
+    """
+    Calculate the great circle distance between two points
+    on the earth (specified in decimal degrees)
+
+    All args must be of equal length.
+
+    """
+    lon1, lat1, lon2, lat2 = map(np.radians, [lon1, lat1, lon2, lat2])
+
+    dlon = lon2 - lon1
+    dlat = lat2 - lat1
+
+    a = np.sin(dlat/2.0)**2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon/2.0)**2
+
+    c = 2 * np.arcsin(np.sqrt(a))
+    km = 6367 * c
+    return km
+
+@numba.jit(nopython=True)
+def cdist_calc(cnearest, lon, lat, efs):
+    # Firstly evaluate target longitude and latitude
+    lon_target = np.zeros_like(lon)
+    lat_target = np.zeros_like(lat)
+
+    for i in range(lon.shape[0]):
+        for j in range(lon.shape[1]):
+            target_i = cnearest[0, i, j]
+            target_j = cnearest[1, i, j]
+
+            lon_target[i, j] = lon[target_i, target_j]
+            lat_target[i, j] = lat[target_i, target_j]
+
+    # Now calculate distances between (lon, lat) and (lon_target, lat_target)
+    cdist = haversine_np(lon, lat, lon_target, lat_target)
+
+    return cdist
+
+@numba.jit(nopython=True)
+def cplastic_calc(plastic_data, cnearest):
+    cplastic = np.zeros_like(plastic_data)
+
+    for i in range(plastic_data.shape[0]):
+        for j in range(plastic_data.shape[1]):
+            target_i = cnearest[0, i, j]
+            target_j = cnearest[1, i, j]
+
+            cplastic[target_i, target_j] += plastic_data[i, j]
+
+    return cplastic
+
+@numba.jit(nopython=True)
+def id_coast_cells(coast, country_id, country_id_nearest):
+    coast_id = np.copy(coast)
+
+    for i in range(coast_id.shape[0]):
+        for j in range(coast_id.shape[1]):
+            if coast[i, j] == 1:
+                # Firstly check if the coast already has a country ID
+                id0 = country_id[i, j]
+
+                if id0 == -32768:
+                    target_i = country_id_nearest[0, i, j]
+                    target_j = country_id_nearest[1, i, j]
+                    id0 = country_id[target_i, target_j]
+
+                coast_id[i, j] = id0
+
+    return coast_id
 
 @numba.jit(nopython=True)
 def psi_mask(lsm_rho, psi_grid):
@@ -67,8 +143,6 @@ def cnorm(lsm_rho):
     cnormx = np.zeros_like(lsm_rho, dtype=np.float32)
     cnormy = np.zeros_like(lsm_rho, dtype=np.float32)
 
-    cf = 1/np.sqrt(2)
-
     for i in range(lsm_rho.shape[0]-2):
         for j in range(lsm_rho.shape[1]-2):
             if (i > 0)*(j > 0):
@@ -97,7 +171,7 @@ def cnorm(lsm_rho):
 
     return cnormx, cnormy
 
-def release_time(Years, Months, RPM, t0, **kwargs):
+def release_time(param, **kwargs):
     # Generate a list of release times in seconds from the start of the model
     # data
 
@@ -111,6 +185,11 @@ def release_time(Years, Months, RPM, t0, **kwargs):
     except:
         start_mode = True
         print('Releasing at end of month...')
+
+    Years  = [param['Ymin'], param['Ymax']]
+    Months = [param['Mmin'], param['Mmax']]
+    RPM    = param['RPM']
+    t0     = int(param['t0'])
 
     Years = np.arange(Years[0], Years[1]+1)
     nyears = Years.shape[0]
@@ -143,16 +222,23 @@ def release_time(Years, Months, RPM, t0, **kwargs):
 
     return time
 
-def release_loc(fh, ids, pn):
+def release_loc(param, fh):
     # Generates initial coordinates for particle releases at a single time
     # frame based on the ISO codes for countries of interest. Particles are
     # only released at least 0.5 cells away from the land mask.
+
+    ids = param['id']
+    pn  = param['pn']
+
+    # Convert pn to the number along a square
+    pn = int(np.ceil(pn**0.5))
 
     # Firstly load the requisite fields:
     # - rho & psi coordinates
     # - lsm_rho mask
     # - id_psi mask (cell ids)
     # - coast_id mask (country codes)
+
 
     with Dataset(fh['grid'], mode='r') as nc:
         lon_psi = np.array(nc.variables['lon_psi'][:])
@@ -164,8 +250,7 @@ def release_loc(fh, ids, pn):
         id_psi    = np.array(nc.variables['id_psi'][:])
         lsm_rho   = np.array(nc.variables['lsm_rho'][:])
 
-    with Dataset(fh['plastic'], mode='r') as nc:
-        iso_psi   = nc.variables['coast_id'][:]
+        iso_psi   = np.array(nc.variables['iso_psi'][:])
 
     # Now find the cells matching the provided ISO codes
     idx = np.where(np.isin(iso_psi, ids))
@@ -266,9 +351,12 @@ def release_loc(fh, ids, pn):
 
     return pos0
 
-def add_times(data, times):
+def add_times(particles):
     # This script takes release locations at a particular time point and
     # duplicates it across multiple times
+
+    data  = particles['loc_array']
+    times = particles['time_array']
 
     ntimes = times.shape[0]
     npart  = data['lon'].shape[0]
@@ -282,19 +370,40 @@ def add_times(data, times):
     return data
 
 
-def cmems_globproc(model_fh, mask_fh, **kwargs):
+def gridgen(fh, dirs, param, **kwargs):
     # This function takes output from global CMEMS GLORYS12V1 and generates
     # Labelled coast cells
     # A land mask
     # Cell boundaries (boundary points)
+    # Country IDs
+
+    # Also optionally generates plastic coastal accumulation rates
+
+    try:
+        if kwargs['plastic']:
+            plastic = True
+        else:
+            plastic = False
+    except:
+        plastic = False
+
+    # File handles
+    try:
+        model_fh = fh['ocean'][0]
+    except:
+        model_fh = fh['ocean']
+
+    grid_fh  = fh['grid']
 
     # Note:
     # Velocities are defined on the rho grid
     # Land-sea mask/coast are defined on the psi grid
 
-    if os.path.isfile(mask_fh):
-        with Dataset(mask_fh, mode='r') as nc:
-            contents = {'coast_psi': np.array(nc.variables['coast_psi'][:]),
+    if os.path.isfile(grid_fh):
+        with Dataset(grid_fh, mode='r') as nc:
+            if plastic:
+                print('Grid file found, loading data (with plastics)')
+                grid = {'coast_psi': np.array(nc.variables['coast_psi'][:]),
                         'lsm_psi': np.array(nc.variables['lsm_psi'][:]),
                         'lsm_rho': np.array(nc.variables['lsm_rho'][:]),
                         'lon_rho': np.array(nc.variables['lon_rho'][:]),
@@ -304,9 +413,26 @@ def cmems_globproc(model_fh, mask_fh, **kwargs):
                         'cdist_rho': np.array(nc.variables['cdist_rho'][:]),
                         'cnormx_rho': np.array(nc.variables['cnormx_rho'][:]),
                         'cnormy_rho': np.array(nc.variables['cnormy_rho'][:]),
-                        'id_psi': np.array(nc.variables['id_psi'])}
+                        'id_psi': np.array(nc.variables['id_psi']),
+                        'iso_psi': np.array(nc.variables['iso_psi']),
+                        'cplastic_psi': np.array(nc.variables['cplastic_psi']),
+                        'rplastic_psi': np.array(nc.variables['rplastic_psi'])}
+            else:
+                print('Grid file found, loading data (without plastics)')
+                grid = {'coast_psi': np.array(nc.variables['coast_psi'][:]),
+                            'lsm_psi': np.array(nc.variables['lsm_psi'][:]),
+                            'lsm_rho': np.array(nc.variables['lsm_rho'][:]),
+                            'lon_rho': np.array(nc.variables['lon_rho'][:]),
+                            'lon_psi': np.array(nc.variables['lon_psi'][:]),
+                            'lat_rho': np.array(nc.variables['lat_rho'][:]),
+                            'lat_psi': np.array(nc.variables['lat_psi'][:]),
+                            'cdist_rho': np.array(nc.variables['cdist_rho'][:]),
+                            'cnormx_rho': np.array(nc.variables['cnormx_rho'][:]),
+                            'cnormy_rho': np.array(nc.variables['cnormy_rho'][:]),
+                            'id_psi': np.array(nc.variables['id_psi'])}
 
     else:
+        print('Grid file not found, building grid file')
         with Dataset(model_fh, mode='r') as nc:
             lon_rho = np.array(nc.variables['longitude'][:])
             lat_rho = np.array(nc.variables['latitude'][:])
@@ -362,18 +488,7 @@ def cmems_globproc(model_fh, mask_fh, **kwargs):
             if np.sum(island_loc*coast_psi) > 0:
                 raise ValueError('Added islands overlap with existing LSM')
 
-            # Add island IDs
-            # island_loc = np.where(island_loc > 0)
-            # island_id  = np.zeros_like(island_loc, dtype=np.int32)
-
-            # for island in range(len(island_loc[0])):
-            #     i = island_loc[0][island]
-            #     j = island_loc[1][island]
-
-            #     island_id[i, j] = 10000*i + j
-
             coast_psi += island_loc
-            # id_psi    += island_id
 
         # Now generate a rho grid with the distance to the coast
         cdist_rho = distance_transform_edt(1-lsm_rho)
@@ -381,8 +496,113 @@ def cmems_globproc(model_fh, mask_fh, **kwargs):
         # Now generate vectors pointing away from the coast
         cnormx, cnormy = cnorm(lsm_rho)
 
+        # Now generate plastic data if required
+        if plastic:
+            efs = 1/param['p_param']['l']
+            cr  = param['p_param']['cr']
+
+            plastic_dir = dirs['plastic']
+
+            # Lebreton & Andrady plastic waste generation data
+            # https://www.nature.com/articles/s41599-018-0212-7
+            plastic_fh = plastic_dir + 'LebretonAndrady2019_MismanagedPlasticWaste.tif'
+
+            # Country ID grid(UN WPP-Adjusted Population Density v4.11)
+            # https://sedac.ciesin.columbia.edu/data/collection/gpw-v4/sets/browse
+            id_fh      = plastic_dir + 'gpw_v4_national_identifier_grid_rev11_30_sec.tif'
+
+            # Meijer et al river plastic data
+            # https://advances.sciencemag.org/content/7/18/eaaz5803/tab-figures-data
+            river_fh   = plastic_dir + 'Meijer2021_midpoint_emissions.zip'
+
+            ##############################################################################
+            # Coastal plastics ###########################################################
+            ##############################################################################
+
+
+            # Methodology
+            # 1. Upscale plastic/id data to 1/12 grid
+            # 2. Calculate nearest coastal cell on CMEMS grid
+            # 3. Calculate the distance of each cell to coastal cell with Haversine
+            # 4. Calculate the waste flux at each coastal cell (sum of weighted land cells)
+
+            lon_bnd = np.append(lon_rho, 180)
+            lat_bnd = lat_rho
+
+            # Load plastic data
+            plastic_data_obj = gdal.Open(plastic_fh)
+            plastic_data = plastic_data_obj.ReadAsArray()[:-1200, :]
+
+            # Load country codes
+            country_id_obj = gdal.Open(id_fh)
+            country_id = country_id_obj.ReadAsArray()[:-1200, :]
+
+            # 1. Upscale data to 1/12 grid
+            plastic_data = block_reduce(plastic_data, (10,10), np.sum)
+            plastic_data = np.float64(np.flipud(plastic_data))
+            country_id = block_reduce(country_id, (10,10), np.max)
+            country_id = np.flipud(country_id)
+
+            # 2. Calculate nearest coastal cells
+            cnearest = distance_transform_edt(1-coast_psi,
+                                              return_distances=False,
+                                              return_indices=True)
+
+
+            # 3. Calculate the distance of each waste flux cell to the nearest coastal
+            #    cell
+            lon_psi_grd, lat_psi_grd = np.meshgrid(lon_psi, lat_psi)
+            cdist = cdist_calc(cnearest, lon_psi_grd, lat_psi_grd, efs)
+
+            #    Modify cells by W_mod = W*exp(-efs*cdist)*cr
+            plastic_data *= cr*np.exp(-efs*cdist)
+
+            # 4. Calculate the waste flux at each coastal cell
+            cplastic = cplastic_calc(plastic_data, cnearest)
+
+            ##############################################################################
+            # Riverine plastics ##########################################################
+            ##############################################################################
+
+            river_file = gpd.read_file(river_fh)
+            river_data = np.array(river_file['dots_exten'])*1000.  # tons -> kg
+            river_lon  = np.array(river_file['geometry'].x)
+            river_lat  = np.array(river_file['geometry'].y)
+
+            # Bin onto the 1/12 degree grid
+            rplastic   = np.histogram2d(river_lon, river_lat,
+                                        bins=[lon_bnd, lat_bnd],
+                                        weights=river_data,
+                                        normed=False)[0].T
+
+            # Shift to coastal cells
+            rplastic   = cplastic_calc(rplastic, cnearest)
+
+            ##############################################################################
+            # Label coastal cells ########################################################
+            ##############################################################################
+
+            # Label coastal cells (coast) with their ISO country identifier
+            # Calculate the nearest country_id to each grid cell without a country_id
+            # A coastal cell with a country id takes that country id, otherwise it takes
+            # the nearest country id
+
+            country_id_lsm = np.copy(country_id)
+            country_id_lsm[country_id_lsm >= 0] = 0
+            country_id_lsm[country_id_lsm <  0] = 1
+
+            country_id_nearest = distance_transform_edt(country_id_lsm,
+                                                        return_distances=False,
+                                                        return_indices=True)
+
+            iso_psi = id_coast_cells(coast_psi.astype('int16'), country_id, country_id_nearest)
+
+            total_coastal_plastic = '{:3.2f}'.format(np.sum(cplastic)/1e9) + ' Mt yr-1'
+            total_riverine_plastic = '{:3.2f}'.format(np.sum(rplastic)/1e9) + ' Mt yr-1'
+
+
         # Save to netcdf
-        with Dataset(mask_fh, mode='w') as nc:
+        with Dataset(grid_fh, mode='w') as nc:
             # Create the dimensions
             nc.createDimension('lon_rho', len(lon_rho))
             nc.createDimension('lat_rho', len(lat_rho))
@@ -455,86 +675,249 @@ def cmems_globproc(model_fh, mask_fh, **kwargs):
             nc.variables['id_psi'].standard_name = 'id_psi'
             nc.variables['id_psi'][:] = id_psi
 
-            contents = {'coast_psi': np.array(nc.variables['coast_psi'][:]),
-                        'lsm_psi': np.array(nc.variables['lsm_psi'][:]),
-                        'lsm_rho': np.array(nc.variables['lsm_rho'][:]),
-                        'lon_rho': np.array(nc.variables['lon_rho'][:]),
-                        'lon_psi': np.array(nc.variables['lon_psi'][:]),
-                        'lat_rho': np.array(nc.variables['lat_rho'][:]),
-                        'lat_psi': np.array(nc.variables['lat_psi'][:]),
-                        'cdist_rho': np.array(nc.variables['cdist_rho'][:]),
-                        'cnormx_rho': np.array(nc.variables['cnormx_rho'][:]),
-                        'cnormy_rho': np.array(nc.variables['cnormy_rho'][:]),
-                        'id_psi': np.array(nc.variables['id_psi'])}
+            # Global attributes
+            date = datetime.now()
+            date = date.strftime('%d/%m/%Y, %H:%M:%S')
+            nc.date_created = date
 
-    return contents
+            if plastic:
+                nc.createVariable('cplastic_psi', 'f8', ('lat_psi', 'lon_psi'), zlib=True)
+                nc.variables['cplastic_psi'].long_name = 'plastic_flux_at_coast_psi_from_coastal_sources'
+                nc.variables['cplastic_psi'].units = 'kg yr-1'
+                nc.variables['cplastic_psi'].standard_name = 'coast_plastic'
+                nc.variables['cplastic_psi'].total_flux = total_coastal_plastic
+                nc.variables['cplastic_psi'][:] = cplastic
 
 
-# def one_release(lon0, lon1, lat0, lat1, coast, coast_lon, coast_lat,
-#                 coast_lon_bnd, coast_lat_bnd, pn):
+                nc.createVariable('rplastic_psi', 'f8', ('lat_psi', 'lon_psi'), zlib=True)
+                nc.variables['rplastic_psi'].long_name = 'plastic_flux_at_coast_psi_from_riverine_sources'
+                nc.variables['rplastic_psi'].units = 'kg yr-1'
+                nc.variables['rplastic_psi'].standard_name = 'river_plastic'
+                nc.variables['rplastic_psi'].total_flux = total_riverine_plastic
+                nc.variables['rplastic_psi'][:] = rplastic
 
-#     # This script generates the release locations based on the coastline mask
-#     # and a release region
+                nc.createVariable('iso_psi', 'i4', ('lat_psi', 'lon_psi'), zlib=True)
+                nc.variables['iso_psi'].long_name = 'ISO_3166-1_numeric_code_of_coastal_psi_cells'
+                nc.variables['iso_psi'].units = 'no units'
+                nc.variables['iso_psi'].standard_name = 'iso_psi'
+                nc.variables['iso_psi'][:] = iso_psi
 
-#     # Firstly subset the domain
-#     j0 = np.searchsorted(coast_lon, lon0)
-#     j1 = np.searchsorted(coast_lon, lon1)
-#     i0 = np.searchsorted(coast_lat, lat0)
-#     i1 = np.searchsorted(coast_lat, lat1)
+                nc.country_id_source = 'https://sedac.ciesin.columbia.edu/data/collection/gpw-v4/sets/browse'
+                nc.coast_plastic_source = 'https://www.nature.com/articles/s41599-018-0212-7'
+                nc.river_plastic_source = 'https://advances.sciencemag.org/content/7/18/eaaz5803/tab-figures-data'
 
-#     coast = coast[i0:i1, j0:j1]
-#     coast_lon = coast_lon[j0:j1]
-#     coast_lon_bnd = coast_lon_bnd[j0:j1+1]
-#     coast_lat = coast_lat[i0:i1]
-#     coast_lat_bnd = coast_lat_bnd[i0:i1+1]
+                grid = {'coast_psi': np.array(nc.variables['coast_psi'][:]),
+                            'lsm_psi': np.array(nc.variables['lsm_psi'][:]),
+                            'lsm_rho': np.array(nc.variables['lsm_rho'][:]),
+                            'lon_rho': np.array(nc.variables['lon_rho'][:]),
+                            'lon_psi': np.array(nc.variables['lon_psi'][:]),
+                            'lat_rho': np.array(nc.variables['lat_rho'][:]),
+                            'lat_psi': np.array(nc.variables['lat_psi'][:]),
+                            'cdist_rho': np.array(nc.variables['cdist_rho'][:]),
+                            'cnormx_rho': np.array(nc.variables['cnormx_rho'][:]),
+                            'cnormy_rho': np.array(nc.variables['cnormy_rho'][:]),
+                            'id_psi': np.array(nc.variables['id_psi']),
+                            'iso_psi': np.array(nc.variables['iso_psi']),
+                            'cplastic_psi': np.array(nc.variables['cplastic_psi']),
+                            'rplastic_psi': np.array(nc.variables['rplastic_psi'])}
+            else:
+                grid = {'coast_psi': np.array(nc.variables['coast_psi'][:]),
+                            'lsm_psi': np.array(nc.variables['lsm_psi'][:]),
+                            'lsm_rho': np.array(nc.variables['lsm_rho'][:]),
+                            'lon_rho': np.array(nc.variables['lon_rho'][:]),
+                            'lon_psi': np.array(nc.variables['lon_psi'][:]),
+                            'lat_rho': np.array(nc.variables['lat_rho'][:]),
+                            'lat_psi': np.array(nc.variables['lat_psi'][:]),
+                            'cdist_rho': np.array(nc.variables['cdist_rho'][:]),
+                            'cnormx_rho': np.array(nc.variables['cnormx_rho'][:]),
+                            'cnormy_rho': np.array(nc.variables['cnormy_rho'][:]),
+                            'id_psi': np.array(nc.variables['id_psi'])}
 
-#     # Calculate the number of particles to be released
-#     ncells = np.sum(coast)
-#     pn2 = pn*pn
-#     nparticles = int(ncells*pn2)
+    return grid
 
-#     pos0 = np.zeros((nparticles, 2))
 
-#     # Calculate particle initial positions
-#     comp_counter = 0
-#     for i in range(len(coast_lat)):
-#         for j in range(len(coast_lon)):
-#             # Check if coast cell
+# # Directories
+# script_dir = os.path.dirname(os.path.realpath(__file__)) + '/'
+# grid_dir   = script_dir + 'CMEMS/'
+# data_dir   = script_dir + 'PLASTIC_DATA/'
 
-#             if coast[i, j] == 1:
-#                 x0 = coast_lon_bnd[j]
-#                 x1 = coast_lon_bnd[j+1]
-#                 y0 = coast_lat_bnd[i]
-#                 y1 = coast_lat_bnd[i+1]
+# # Grid from CMEMS
+# grid_fh    = grid_dir + 'globmask.nc'
 
-#                 # Calculate the particle spacing
-#                 dx = (x1 - x0)/(pn+1)
-#                 dy = (y1 - y0)/(pn+1)
+# # Lebreton & Andrady plastic waste generation data
+# # https://www.nature.com/articles/s41599-018-0212-7
+# plastic_fh = data_dir + 'LebretonAndrady2019_MismanagedPlasticWaste.tif'
 
-#                 # Notify user of the particle spacing
-#                 if comp_counter == 0:
-#                     spacing = int(np.pi*6371000/180*dy)
-#                     print('Particle spacing is c. ' + str(spacing) + 'm')
+# # Country ID grid(UN WPP-Adjusted Population Density v4.11)
+# # https://sedac.ciesin.columbia.edu/data/collection/gpw-v4/sets/browse
+# id_fh      = data_dir + 'gpw_v4_national_identifier_grid_rev11_30_sec.tif'
 
-#                 # dx/2 and dy/2 spacing is needed on the boundaries of each cell to
-#                 # prevent overlaps between adjacent cells
-#                 x0 += 0.5*dx
-#                 x1 -= 0.5*dx
-#                 y0 += 0.5*dy
-#                 y1 -= 0.5*dy
+# # Meijer et al river plastic data
+# # https://advances.sciencemag.org/content/7/18/eaaz5803/tab-figures-data
+# river_fh   = data_dir + 'Meijer2021_midpoint_emissions.zip'
 
-#                 x_lin = np.linspace(x0, x1, num=pn)
-#                 y_lin = np.linspace(y0, y1, num=pn)
+# # Output netcdf fh
+# out_fh     = grid_dir + 'plastic_flux.nc'
 
-#                 x, y = np.meshgrid(x_lin, y_lin)
-#                 x = x.flatten()
-#                 y = y.flatten()
+##############################################################################
+# Coastal plastics ###########################################################
+##############################################################################
 
-#                 pos0[comp_counter*pn2:(comp_counter+1)*pn2, 0] = x
-#                 pos0[comp_counter*pn2:(comp_counter+1)*pn2, 1] = y
+# Methodology
+# 1. Upscale plastic/id data to 1/12 grid
+# 2. Calculate nearest coastal cell on CMEMS grid
+# 3. Calculate the distance of each cell to coastal cell with Haversine
+# 4. Calculate the waste flux at each coastal cell (sum of weighted land cells)
 
-#                 comp_counter += 1
+# Load CMEMS grid
+# with Dataset(grid_fh, mode='r') as nc:
+#     # Cell boundaries
+#     lon_bnd = nc.variables['lon_rho'][:]
+#     lon_bnd = np.append(lon_bnd, 180)
+#     lat_bnd = nc.variables['lat_rho'][:]
 
-#     return pos0
+#     # Cell centres
+#     lon     = nc.variables['lon_psi'][:]
+#     lat     = nc.variables['lat_psi'][:]
+#     lon, lat = np.meshgrid(lon, lat)
 
+#     # Coast and lsm
+#     coast   = nc.variables['coast_psi'][:]
+#     lsm     = nc.variables['lsm_psi'][:]
+
+# # Load plastic data
+# plastic_data_obj = gdal.Open(plastic_fh)
+# plastic_data = plastic_data_obj.ReadAsArray()[:-1200, :]
+
+# # Load country codes
+# country_id_obj = gdal.Open(id_fh)
+# country_id = country_id_obj.ReadAsArray()[:-1200, :]
+
+# # 1. Upscale data to 1/12 grid
+# plastic_data = block_reduce(plastic_data, (10,10), np.sum)
+# plastic_data = np.float64(np.flipud(plastic_data))
+# country_id = block_reduce(country_id, (10,10), np.max)
+# country_id = np.flipud(country_id)
+
+# # 2. Calculate nearest coastal cells
+# cnearest = distance_transform_edt(1-coast,
+#                                   return_distances=False,
+#                                   return_indices=True)
+
+
+# # 3. Calculate the distance of each waste flux cell to the nearest coastal
+# #    cell
+# cdist = cdist_calc(cnearest, lon, lat, efs)
+
+# #    Modify cells by W_mod = W*exp(-efs*cdist)*cr
+# plastic_data *= cr*np.exp(-efs*cdist)
+
+# # 4. Calculate the waste flux at each coastal cell
+# cplastic = cplastic_calc(plastic_data, cnearest)
+
+# ##############################################################################
+# # Riverine plastics ##########################################################
+# ##############################################################################
+
+# river_file = gpd.read_file(river_fh)
+# river_data = np.array(river_file['dots_exten'])*1000.  # tons -> kg
+# river_lon  = np.array(river_file['geometry'].x)
+# river_lat  = np.array(river_file['geometry'].y)
+
+# # Bin onto the 1/12 degree grid
+# rplastic   = np.histogram2d(river_lon, river_lat,
+#                             bins=[lon_bnd, lat_bnd],
+#                             weights=river_data,
+#                             normed=False)[0].T
+
+# # Shift to coastal cells
+# rplastic   = cplastic_calc(rplastic, cnearest)
+
+
+# ##############################################################################
+# # Label coastal cells ########################################################
+# ##############################################################################
+
+# # Label coastal cells (coast) with their ISO country identifier
+# # Calculate the nearest country_id to each grid cell without a country_id
+# # A coastal cell with a country id takes that country id, otherwise it takes
+# # the nearest country id
+
+# country_id_lsm = np.copy(country_id)
+# country_id_lsm[country_id_lsm >= 0] = 0
+# country_id_lsm[country_id_lsm <  0] = 1
+
+# country_id_nearest = distance_transform_edt(country_id_lsm,
+#                                             return_distances=False,
+#                                             return_indices=True)
+
+# coast_id = id_coast_cells(coast, country_id, country_id_nearest)
+
+# ##############################################################################
+# # Save to netcdf #############################################################
+# ##############################################################################
+
+# total_coastal_plastic = '{:3.2f}'.format(np.sum(cplastic)/1e9) + ' Mt yr-1'
+# total_riverine_plastic = '{:3.2f}'.format(np.sum(rplastic)/1e9) + ' Mt yr-1'
+
+# with Dataset(out_fh, mode='w') as nc:
+#     # Create dimensions
+#     nc.createDimension('lon', lon.shape[1])
+#     nc.createDimension('lat', lat.shape[0])
+
+#     # Create variables
+#     nc.createVariable('lon', 'f4', ('lon'), zlib=True)
+#     nc.createVariable('lat', 'f4', ('lat'), zlib=True)
+#     nc.createVariable('coast_plastic', 'f8', ('lat', 'lon'), zlib=True)
+#     nc.createVariable('river_plastic', 'f8', ('lat', 'lon'), zlib=True)
+#     nc.createVariable('coast_id', 'i4', ('lat', 'lon'), zlib=True)
+#     nc.createVariable('coast', 'i4', ('lat', 'lon'), zlib=True)
+#     nc.createVariable('lsm', 'i4', ('lat', 'lon'), zlib=True)
+
+#     # Write variables
+#     nc.variables['lon'].long_name = 'longitude'
+#     nc.variables['lon'].units = 'degrees_east'
+#     nc.variables['lon'].standard_name = 'longitude'
+#     nc.variables['lon'][:] = lon[0, :]
+
+#     nc.variables['lat'].long_name = 'latitude'
+#     nc.variables['lat'].units = 'degrees_north'
+#     nc.variables['lat'].standard_name = 'latitude'
+#     nc.variables['lat'][:] = lat[:, 0]
+
+#     nc.variables['coast_plastic'].long_name = 'plastic_flux_at_coast_from_coastal_sources'
+#     nc.variables['coast_plastic'].units = 'kg yr-1'
+#     nc.variables['coast_plastic'].standard_name = 'coast_plastic'
+#     nc.variables['coast_plastic'].total_flux = total_coastal_plastic
+#     nc.variables['coast_plastic'][:] = cplastic
+
+#     nc.variables['river_plastic'].long_name = 'plastic_flux_at_coast_from_riverine_sources'
+#     nc.variables['river_plastic'].units = 'kg yr-1'
+#     nc.variables['river_plastic'].standard_name = 'river_plastic'
+#     nc.variables['river_plastic'].total_flux = total_riverine_plastic
+#     nc.variables['river_plastic'][:] = rplastic
+
+#     nc.variables['coast_id'].long_name = 'ISO_3166-1_numeric_code_of_coastal_cells'
+#     nc.variables['coast_id'].units = 'no units'
+#     nc.variables['coast_id'].standard_name = 'coast_id'
+#     nc.variables['coast_id'][:] = coast_id
+
+#     nc.variables['coast'].long_name = 'coast_mask'
+#     nc.variables['coast'].units = '1: coast, 0: not coast'
+#     nc.variables['coast'].standard_name = 'coast_mask'
+#     nc.variables['coast'][:] = coast
+
+#     nc.variables['lsm'].long_name = 'land_sea_mask'
+#     nc.variables['lsm'].units = 'no units'
+#     nc.variables['lsm'].standard_name = '1: land, 0: ocean'
+#     nc.variables['lsm'][:] = lsm
+
+#     # Global attributes
+#     date = datetime.now()
+#     date = date.strftime('%d/%m/%Y, %H:%M:%S')
+#     nc.date_created = date
+
+#     nc.country_id_source = 'https://sedac.ciesin.columbia.edu/data/collection/gpw-v4/sets/browse'
+#     nc.coast_plastic_source = 'https://www.nature.com/articles/s41599-018-0212-7'
+#     nc.river_plastic_source = 'https://advances.sciencemag.org/content/7/18/eaaz5803/tab-figures-data'
 
