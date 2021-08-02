@@ -70,7 +70,7 @@ fh = {'ocean':   sorted(glob(dirs['model'] + 'OCEAN_*.nc')),
       'sid':     dirs['traj'] + 'sid.nc'}
 
 ##############################################################################
-# SET UP PARTICLE RELEASEs                                                   #
+# SET UP PARTICLE RELEASES                                                   #
 ##############################################################################
 
 # Calculate the starting time (t0) for the model data
@@ -96,6 +96,11 @@ with Dataset(fh['ocean'][0], 'r') as nc:
                                           month=param['Mmin'],
                                           day=1)).total_seconds()
 
+    # Add the end time
+    param['endtime'] = datetime(year=param['Yend'],
+                                month=param['Mend'],
+                                day=param['Dend'])
+
 grid = mdm.gridgen(fh, dirs, param, plastic=True)
 
 # Calculate the times for particle releases
@@ -107,32 +112,195 @@ particles['loc_array'] = mdm.release_loc(param, fh)
 # Calculate a final array of release positions, IDs, and times
 particles['pos'] = mdm.add_times(particles)
 
-print()
-
-
-
 ##############################################################################
-# PARAMETERS                                                                 #
+# SET UP FIELDSETS                                                           #
 ##############################################################################
 
-# # Release timing
-# Years  = [2019, 2019]  # Minimum and maximum release year
-# Months = [1, 11]        # Minimum and maximum release month
-# RPM    = 1             # Particle releases per calender month
-# mode   = 'end'         # Release at start or end of month
+# Chunksize for parallel execution
+cs_OCEAN = {'time': ('time', 2),
+            'lat': ('latitude', 512),
+            'lon': ('longitude', 512)}
 
-# # Release locations
-# CountryIDs = [690]     # ISO country codes for starting locations
-# PN         = 2       # Sqrt of number of particles per cell (must be even!)
+cs_WAVE  = {'time': ('time', 2),
+            'lat': ('latitude', 512),
+            'lon': ('longitude', 512)}
 
-# Runtime parameters
-# sim_T      = timedelta(days=10)
-# sim_dt     = timedelta(minutes=-15)
-# out_dt     = timedelta(hours=1)
+# OCEAN (CMEMS GLORYS12V1)
+filenames = fh['ocean']
 
-# # Debug/Checking tools
-# debug      = False
-# viz_lim    = {'lonW': 46,
-#               'lonE': 47,
-#               'latS': -10,
-#               'latN': -9}
+variables = {'U': 'uo',
+              'V': 'vo'}
+
+dimensions = {'U': {'lon': 'longitude', 'lat': 'latitude', 'time': 'time'},
+              'V': {'lon': 'longitude', 'lat': 'latitude', 'time': 'time'}}
+
+fieldset_ocean = FieldSet.from_netcdf(filenames, variables, dimensions,
+                                      chunksize=cs_OCEAN)
+
+# WAVE (STOKES FROM WAVERYS W/ GLORYS12V1)
+filenames = fh['wave']
+
+variables = {'U': 'VSDX',
+             'V': 'VSDY'}
+
+dimensions = {'U': {'lon': 'longitude', 'lat': 'latitude', 'time': 'time'},
+              'V': {'lon': 'longitude', 'lat': 'latitude', 'time': 'time'}}
+
+fieldset_wave = FieldSet.from_netcdf(filenames, variables, dimensions,
+                                      chunksize=cs_WAVE)
+
+fieldset = FieldSet(U=fieldset_ocean.U+fieldset_wave.U,
+                    V=fieldset_ocean.V+fieldset_wave.V)
+
+# ADD THE LSM, ID, CDIST, AND CNORM FIELDS
+lsm_rho = Field.from_netcdf(fh['grid'],
+                            variable='lsm_rho',
+                            dimensions={'lon': 'lon_rho',
+                                        'lat': 'lat_rho'},
+                            interp_method='linear',
+                            allow_time_extrapolation=True)
+
+id_psi  = Field.from_netcdf(fh['grid'],
+                            variable='id_psi',
+                            dimensions={'lon': 'lon_psi',
+                                        'lat': 'lat_psi'},
+                            interp_method='nearest',
+                            allow_time_extrapolation=True)
+
+cdist   = Field.from_netcdf(fh['grid'],
+                            variable='cdist_rho',
+                            dimensions={'lon': 'lon_rho',
+                                        'lat': 'lat_rho'},
+                            interp_method='linear',
+                            allow_time_extrapolation=True)
+
+cnormx  = Field.from_netcdf(fh['grid'],
+                            variable='cnormx_rho',
+                            dimensions={'lon': 'lon_rho',
+                                        'lat': 'lat_rho'},
+                            interp_method='linear',
+                            mesh='spherical',
+                            allow_time_extrapolation=True)
+
+cnormy  = Field.from_netcdf(fh['grid'],
+                            variable='cnormy_rho',
+                            dimensions={'lon': 'lon_rho',
+                                        'lat': 'lat_rho'},
+                            interp_method='linear',
+                            mesh='spherical',
+                            allow_time_extrapolation=True)
+
+fieldset.add_field(cdist)
+fieldset.add_field(id_psi)
+fieldset.add_field(cnormx)
+fieldset.add_field(cnormy)
+fieldset.add_field(lsm_rho)
+
+fieldset.cnormx_rho.units = GeographicPolar()
+fieldset.cnormy_rho.units = Geographic()
+
+# ADD THE PERIODIC BOUNDARY
+fieldset.add_constant('halo_west', -180.)
+fieldset.add_constant('halo_east', 180.)
+fieldset.add_periodic_halo(zonal=True)
+
+##############################################################################
+# KERNELS                                                                    #
+##############################################################################
+
+class debris(JITParticle):
+    # Land-sea mask (if particle has beached)
+    lsm = Variable('lsm',
+                   dtype=np.float32,
+                   initial=0,
+                   to_write=False)
+
+    # Source ID
+    sid = Variable('sid',
+                   dtype=np.int32,
+                   initial=fieldset.id_psi,
+                   to_write='once')
+
+    # Particle distance from land
+    cd  = Variable('cd',
+                   dtype=np.float32,
+                   initial=0.,
+                   to_write=False)
+
+    # Time at sea (ocean time)
+    ot  = Variable('ot',
+                   dtype=np.int32,
+                   initial=0,
+                   to_write=False)
+
+    # Velocity away from coast (to prevent beaching)
+    uc  = Variable('uc',
+                   dtype=np.float32,
+                   initial=0.,
+                   to_write=False)
+
+    vc  = Variable('vc',
+                   dtype=np.float32,
+                   initial=0.,
+                   to_write=False)
+
+
+def beach(particle, fieldset, time):
+    #  Recovery kernel to delete a particle if it is beached
+    particle.lsm = fieldset.lsm_rho[particle]
+
+    if particle.lsm >= 0.999:
+        particle.delete()
+
+def antibeach(particle, fieldset, time):
+    #  Kernel to repel particles from the coast
+    particle.cd = fieldset.cdist_rho[particle]
+
+    if particle.cd < 0.5:
+
+        particle.uc = fieldset.cnormx_rho[particle]
+        particle.vc = fieldset.cnormy_rho[particle]
+
+        particle.uc *= -1*(particle.cd - 0.5)**2
+        particle.vc *= -1*(particle.cd - 0.5)**2
+
+        particle.lon += particle.uc*particle.dt
+        particle.lat += particle.vc*particle.dt
+
+def deleteParticle(particle, fieldset, time):
+    #  Recovery kernel to delete a particle if it leaves the domain
+    #  (possible in certain configurations)
+    particle.delete()
+
+def periodicBC(particle, fieldset, time):
+    # Move the particle across the periodic boundary
+    if particle.lon < fieldset.halo_west:
+        particle.lon += fieldset.halo_east - fieldset.halo_west
+    elif particle.lon > fieldset.halo_east:
+        particle.lon -= fieldset.halo_east - fieldset.halo_west
+
+##############################################################################
+# INITIALISE SIMULATION AND RUN                                              #
+##############################################################################
+pset = ParticleSet.from_list(fieldset=fieldset,
+                             pclass=debris,
+                             lon  = particles['pos']['lon'],
+                             lat  = particles['pos']['lat'],
+                             time = particles['pos']['time'])
+print(str(len(particles['pos']['time'])) + ' particles released!')
+
+traj = pset.ParticleFile(name=fh['traj'],
+                         outputdt=param['dt_out'])
+
+kernels = (pset.Kernel(AdvectionRK4) +
+           pset.Kernel(antibeach) +
+           pset.Kernel(beach) +
+           pset.Kernel(periodicBC))
+
+pset.execute(kernels,
+             endtime=param['endtime'],
+             dt=param['dt_RK4'],
+             recovery={ErrorCode.ErrorOutOfBounds: deleteParticle},
+             output_file=traj)
+
+traj.export()

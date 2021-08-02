@@ -176,7 +176,7 @@ def release_time(param, **kwargs):
     # data
 
     try:
-        if kwargs['mode'] == 'start':
+        if kwargs['mode'] == 'START':
             start_mode = True
             print('Releasing at start of month...')
         else:
@@ -305,10 +305,10 @@ def release_loc(param, fh):
         loc_y = lat_psi[loc_yidx]
         loc_x = lon_psi[loc_xidx]
 
-        loc_ymin = lat_rho[loc_yidx]
-        loc_ymax = lat_rho[loc_yidx+1]
-        loc_xmin = lon_rho[loc_xidx]
-        loc_xmax = lon_rho[loc_xidx+1]
+        # loc_ymin = lat_rho[loc_yidx]
+        # loc_ymax = lat_rho[loc_yidx+1]
+        # loc_xmin = lon_rho[loc_xidx]
+        # loc_xmax = lon_rho[loc_xidx+1]
 
         loc_id   = id_psi[loc_yidx, loc_xidx]
         loc_iso  = iso_psi[loc_yidx, loc_xidx]
