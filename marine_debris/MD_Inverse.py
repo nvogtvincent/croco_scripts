@@ -6,7 +6,7 @@ CMEMS GLORYS12V1 reanalysis (current and Stokes drift)
 @author: Noam Vogt-Vincent
 """
 
-import marinedebrismethods as mdm
+import MD_Methods as mdm
 import numpy as np
 import os
 import matplotlib.pyplot as plt
