@@ -9,8 +9,6 @@ CMEMS GLORYS12V1 reanalysis (current and Stokes drift)
 import MD_Methods as mdm
 import numpy as np
 import os
-import matplotlib.pyplot as plt
-import cmocean.cm as cm
 from parcels import (Field, FieldSet, ParticleSet, JITParticle, AdvectionRK4,
                      ErrorCode, Geographic, GeographicPolar, Variable)
 from netCDF4 import Dataset, num2date
@@ -47,7 +45,7 @@ param = {# Release timing
 
          # Output parameters
          'dt_out'            : timedelta(hours=6),     # Output frequency
-         'fn_out'            : 'test',                 # Output filename
+         'fn_out'            : 'test.nc',                 # Output filename
 
          # Other parameters
          'update'            : True,                   # Update grid files
@@ -66,7 +64,7 @@ dirs = {'script': os.path.dirname(os.path.realpath(__file__)),
 fh = {'ocean':   sorted(glob(dirs['model'] + 'OCEAN_*.nc')),
       'wave':    sorted(glob(dirs['model'] + 'WAVE_*.nc')),
       'grid':    dirs['grid'] + 'griddata.nc',
-      'traj':    dirs['traj'] + 'backtrack_test.nc',
+      'traj':    dirs['traj'] + param['fn_out'],
       'sid':     dirs['traj'] + 'sid.nc'}
 
 ##############################################################################
@@ -300,7 +298,8 @@ kernels = (pset.Kernel(AdvectionRK4) +
 pset.execute(kernels,
              endtime=param['endtime'],
              dt=param['dt_RK4'],
-             recovery={ErrorCode.ErrorOutOfBounds: deleteParticle},
+             recovery={ErrorCode.ErrorOutOfBounds: deleteParticle,
+                       ErrorCode.ErrorInterpolation: deleteParticle},
              output_file=traj)
 
 traj.export()
