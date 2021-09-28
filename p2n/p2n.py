@@ -13,6 +13,8 @@ import os
 import parcels
 import numpy as np
 from glob import glob
+from netCDF4 import Dataset
+
 
 
 
@@ -43,16 +45,210 @@ def convert(dir_in, fh_out, **kwargs):
     # IMPORTANT NOTE: CURRENTLY IGNORES ALL DELETED PARTICLES!
 
     # BASIC METHODOLOGY:
-    # 1. Scan through numpy files to find out the total number of particles
+    # 1. Scan through numpy files to find out the total number of particles and
+    #    other key parameters (datatype, time, etc.)
     # 2. Create the netcdf file
+    # 3. Incrementally fill the netcdf file
+
+    ###########################################################################
 
     # Detect available system memory
     avail_mem = psutil.virtual_memory()[4]
 
     # Identify the number of parallel processes the parcels simulation was run
     # across
-    dirs     = glob(dir_in + '/*')
+    dirs     = [x for x in glob(dir_in + '/*') if '.' not in x]
     nproc    = len(dirs)
+
+    # Now scan through the processes to find out the following:
+    # 1. Minimum time
+    # 2. Maximum time
+    # 3. Total number of particles (with particle id)
+
+    global_tmin  = []
+    global_tmax  = []
+    global_idmax = []
+
+    for proc_num, proc_dir in enumerate(dirs):
+        # Load the info file for the current process
+        proc_info = np.load(proc_dir + '/pset_info.npy',
+                            allow_pickle=True).item()
+        proc_fhs = proc_info['file_list']
+
+        # Add the tmin, tmax and idmax to the lists
+        global_idmax.append(proc_info['maxid_written'])
+        local_trange = np.array([np.load(proc_dir + '/' + proc_fhs[0].split('/')[-1],
+                                         allow_pickle=True).item()['time'][0],
+                                 np.load(proc_dir + '/' + proc_fhs[-1].split('/')[-1],
+                                         allow_pickle=True).item()['time'][0]])
+        global_tmin.append(np.min(local_trange))
+        global_tmax.append(np.max(local_trange))
+
+        global_torigin = np.datetime_as_string(proc_info['time_origin'].time_origin)
+
+
+        # If this is the first process, find the time-step
+        # Try to firstly intelligently figure out the output time step by
+        # calculating the time step between the first 10 frames and looking
+        # for the most common time step
+        # Also find out the list of variables, datatypes, and time origin
+
+        if proc_num == 0:
+            time_list = []
+
+            for i in range(10):
+                fh = proc_fhs[i]
+                time_list.append(np.load(proc_dir + '/' + fh.split('/')[-1],
+                                         allow_pickle=True).item()['time'][0])
+
+
+            time_dt = np.unique(np.gradient(np.array(time_list)),
+                                return_counts=True)
+
+            # One time step must appear at least half the time to be taken as
+            # reliable. Otherwise, search the entire dataset.
+
+            if time_dt[1][-1] > 5:
+                time_dt = -time_dt[0][-1]
+                print('Confident time step found.')
+                print('Time step set to ' + str(int(time_dt)) + 's')
+                print('')
+            else:
+                print('Could not find reliable time step with quick search.')
+                print('Searching all time frames.')
+                print('')
+
+                time_list = []
+
+                for fh in proc_fhs:
+                    time_list.append(np.load(proc_dir + '/' + fh.split('/')[-1],
+                                             allow_pickle=True).item()['time'][0])
+
+                time_dt = np.unique(np.gradient(np.array(time_list)),
+                                    return_counts=True)
+
+                # One time step must appear at least 10% of the time to be taken as
+                # reliable. Otherwise, return an error.
+
+                if time_dt[1][-1] > int(len(proc_fhs)/10):
+                    time_dt = -time_dt[0][-1]
+                    print('Confident time step found.')
+                    print('Time step set to ' + str(int(time_dt)) + 's')
+                    print('')
+                else:
+                    print('Could not find reliable time step.')
+                    time_dt = float(input('Please enter the time step in seconds:'))
+
+            if time_dt > 0:
+                fwd = True
+            else:
+                fwd = False
+
+            # Create a dict to hold all of the variables and datatypes
+            var_names = proc_info['var_names']
+
+            # Remove id, time and depth (id and time are recorded as 1D arrays to
+            # save space, and depth is not needed at the moment)
+
+            var_names.remove('id')
+            var_names.remove('time')
+            var_names.remove('depth')
+
+            # var_data  = dict((name, []) for name in var_names)
+            var_dtype = dict((name, []) for name in var_names)
+
+            for var_name in var_names:
+                temp_fh = np.load(proc_dir + '/' + proc_fhs[0].split('/')[-1],
+                                  allow_pickle=True).item()[var_name][0]
+                var_dtype[var_name] = temp_fh.dtype
+
+
+
+
+
+    # Now calculate the true global tmin, tmax, and idmax
+    global_tmax = np.max(global_tmax)
+    global_tmin = np.min(global_tmin)
+    global_idmax = np.max(global_idmax)
+
+    # Now generate the time series
+    array_time = np.arange(global_tmin,
+                           global_tmax+np.abs(time_dt),
+                           np.abs(time_dt))
+
+    # Now generate the ids
+    array_id   = np.arange(0, global_idmax+1)
+
+    global_ntime = len(array_time)
+    global_npart = len(array_id)
+
+    ##########################################################################
+
+    # Now create the netcdf file
+
+    # Create a dictionary to translate numpy dtypes to netcdf dtypes
+    dtype_np2nc = {np.float16: 'f2',
+                   np.float32: 'f4',
+                   np.float64: 'f8',
+                   np.int16  : 'i2',
+                   np.int32  : 'i4',
+                   np.int64  : 'i8'}
+
+    # Create a dictionary to map known variables to descriptions
+    long_name = {'lon' : 'longitude',
+                 'lat' : 'latitude'}
+
+    units = {'lon' : 'degrees_east',
+             'lat' : 'degrees_north'}
+
+    standard_name = {'lon' : 'longitude_degrees_east',
+                     'lat' : 'latitude_degrees_north'}
+
+    with Dataset(fh_out, mode='w') as nc:
+        # Create the dimensions
+        nc.createDimension('trajectory', global_npart)
+        nc.createDimension('time', global_ntime)
+
+        # Create the variables
+        nc.createVariable('id', 'i4', ('trajectory'), zlib=True)
+        nc.variables['id'].long_name = 'particle_id'
+        nc.variables['id'].standard_name = 'id'
+        nc.variables['id'][:] = array_id
+
+        nc.createVariable('time', 'f8', ('time'), zlib=True)
+        nc.variables['id'].long_name = 'particle_time'
+        nc.variables['id'].standard_name = 'time'
+        nc.variables['time'][:] = array_time
+
+
+        for var_name in var_names:
+            nc.createVariable(var_name, dtype_np2nc[var_dtype[var_name]],
+                              ('trajectory', 'time'), zlib=True)
+            nc.variables[var_name].long_name = long_name[var_name]
+            nc.variables[var_name].units = units[var_name]
+            nc.variables[var_name].standard_name = standard_name[var_name]
+
+        nc.time_origin = global_torigin
+
+
+
+
+
+
+
+
+
+
+    print()
+
+
+
+
+
+
+
+
+
 
     for proc_num, proc_dir in enumerate(dirs):
         # Load the info file for the current process
