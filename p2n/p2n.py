@@ -16,12 +16,6 @@ from glob import glob
 from netCDF4 import Dataset
 
 
-
-
-
-
-
-
 def convert(dir_in, fh_out, **kwargs):
     '''
     Parameters
@@ -32,7 +26,7 @@ def convert(dir_in, fh_out, **kwargs):
     fh_out : STR
         FILE HANDLE FOR OUTPUT (MUST BE NETCDF).
 
-    **kwargs : ALLOWED KWARGG:
+    **kwargs : ALLOWED KWARGS:
         fwd : BOOL (default TRUE)
             IF PARTICLE TRACKING IS FORWARD OR BACKWARD IN TIME
 
@@ -42,7 +36,7 @@ def convert(dir_in, fh_out, **kwargs):
 
     '''
 
-    # IMPORTANT NOTE: CURRENTLY IGNORES ALL DELETED PARTICLES!
+    # IMPORTANT NOTE: CHUNKING IS NOT YET IMPLEMENTED!
 
     # BASIC METHODOLOGY:
     # 1. Scan through numpy files to find out the total number of particles and
@@ -69,75 +63,43 @@ def convert(dir_in, fh_out, **kwargs):
     global_tmax  = []
     global_idmax = []
 
+    frame_time = dict((directory, []) for directory in range(nproc))
+
     for proc_num, proc_dir in enumerate(dirs):
         # Load the info file for the current process
         proc_info = np.load(proc_dir + '/pset_info.npy',
                             allow_pickle=True).item()
         proc_fhs = proc_info['file_list']
 
+        # Record the time of every file
+        frame_time[proc_num] = np.zeros([len(proc_fhs),], dtype=np.float64)
+
+        for fh_num, fh in enumerate(proc_fhs):
+            frame_time[proc_num][fh_num] = np.load(proc_dir + '/' + fh.split('/')[-1],
+                                                   allow_pickle=True).item()['time'][0]
+
         # Add the tmin, tmax and idmax to the lists
         global_idmax.append(proc_info['maxid_written'])
-        local_trange = np.array([np.load(proc_dir + '/' + proc_fhs[0].split('/')[-1],
-                                         allow_pickle=True).item()['time'][0],
-                                 np.load(proc_dir + '/' + proc_fhs[-1].split('/')[-1],
-                                         allow_pickle=True).item()['time'][0]])
-        global_tmin.append(np.min(local_trange))
-        global_tmax.append(np.max(local_trange))
-
-        global_torigin = np.datetime_as_string(proc_info['time_origin'].time_origin)
-
-
-        # If this is the first process, find the time-step
-        # Try to firstly intelligently figure out the output time step by
-        # calculating the time step between the first 10 frames and looking
-        # for the most common time step
-        # Also find out the list of variables, datatypes, and time origin
+        global_tmin.append(np.min(frame_time[proc_num]))
+        global_tmax.append(np.max(frame_time[proc_num]))
 
         if proc_num == 0:
-            time_list = []
+            # Record time origin
+            global_torigin = np.datetime_as_string(proc_info['time_origin'].time_origin)
 
-            for i in range(10):
-                fh = proc_fhs[i]
-                time_list.append(np.load(proc_dir + '/' + fh.split('/')[-1],
-                                         allow_pickle=True).item()['time'][0])
-
-
-            time_dt = np.unique(np.gradient(np.array(time_list)),
+            # Calculate the time step
+            time_dt = np.unique(np.gradient(np.array(frame_time[proc_num])),
                                 return_counts=True)
 
-            # One time step must appear at least half the time to be taken as
-            # reliable. Otherwise, search the entire dataset.
-
-            if time_dt[1][-1] > 5:
-                time_dt = -time_dt[0][-1]
+            # Check that the modal time step is accurate (>10% of total)
+            if np.max(time_dt[1]) > len(frame_time[proc_num])/10:
+                time_dt = time_dt[0][np.argmax(time_dt[1])]
                 print('Confident time step found.')
                 print('Time step set to ' + str(int(time_dt)) + 's')
                 print('')
             else:
-                print('Could not find reliable time step with quick search.')
-                print('Searching all time frames.')
-                print('')
-
-                time_list = []
-
-                for fh in proc_fhs:
-                    time_list.append(np.load(proc_dir + '/' + fh.split('/')[-1],
-                                             allow_pickle=True).item()['time'][0])
-
-                time_dt = np.unique(np.gradient(np.array(time_list)),
-                                    return_counts=True)
-
-                # One time step must appear at least 10% of the time to be taken as
-                # reliable. Otherwise, return an error.
-
-                if time_dt[1][-1] > int(len(proc_fhs)/10):
-                    time_dt = -time_dt[0][-1]
-                    print('Confident time step found.')
-                    print('Time step set to ' + str(int(time_dt)) + 's')
-                    print('')
-                else:
-                    print('Could not find reliable time step.')
-                    time_dt = float(input('Please enter the time step in seconds:'))
+                print('Could not find reliable time step.')
+                time_dt = float(input('Please enter the time step in seconds:'))
 
             if time_dt > 0:
                 fwd = True
@@ -163,9 +125,6 @@ def convert(dir_in, fh_out, **kwargs):
                 var_dtype[var_name] = temp_fh.dtype
 
 
-
-
-
     # Now calculate the true global tmin, tmax, and idmax
     global_tmax = np.max(global_tmax)
     global_tmin = np.min(global_tmin)
@@ -182,17 +141,9 @@ def convert(dir_in, fh_out, **kwargs):
     global_ntime = len(array_time)
     global_npart = len(array_id)
 
-    ##########################################################################
+    ###########################################################################
 
     # Now create the netcdf file
-
-    # Create a dictionary to translate numpy dtypes to netcdf dtypes
-    dtype_np2nc = {np.float16: 'f2',
-                   np.float32: 'f4',
-                   np.float64: 'f8',
-                   np.int16  : 'i2',
-                   np.int32  : 'i4',
-                   np.int64  : 'i8'}
 
     # Create a dictionary to map known variables to descriptions
     long_name = {'lon' : 'longitude',
@@ -216,13 +167,13 @@ def convert(dir_in, fh_out, **kwargs):
         nc.variables['id'][:] = array_id
 
         nc.createVariable('time', 'f8', ('time'), zlib=True)
-        nc.variables['id'].long_name = 'particle_time'
-        nc.variables['id'].standard_name = 'time'
+        nc.variables['time'].long_name = 'particle_time'
+        nc.variables['time'].standard_name = 'time'
+        nc.variables['time'].standard_name = 'seconds since ' + global_torigin
         nc.variables['time'][:] = array_time
 
-
         for var_name in var_names:
-            nc.createVariable(var_name, dtype_np2nc[var_dtype[var_name]],
+            nc.createVariable(var_name, var_dtype[var_name].str[1:],
                               ('trajectory', 'time'), zlib=True)
             nc.variables[var_name].long_name = long_name[var_name]
             nc.variables[var_name].units = units[var_name]
@@ -230,21 +181,82 @@ def convert(dir_in, fh_out, **kwargs):
 
         nc.time_origin = global_torigin
 
+    ###########################################################################
+
+    # netcdf file has been created, now start populating with data
+    # To minimise memory use, this is done through the following method:
+    # Loop through time steps
+    # -> Set up a 1 x npart vector for that vector for each variable
+    #    Loop through processes
+    #    -> Check if time step is present in process
+    #       If so, add data for each variable to relevant vector
+    # Copy to netcdf
+
+    for ti, t in enumerate(array_time):
+        var_data = dict((name, []) for name in var_names)
+        for var_name in var_names:
+            var_data[var_name] = np.zeros([global_npart,],
+                                            dtype=var_dtype[var_name])
+
+        for proc_num, proc_dir in enumerate(dirs):
+            # Check if time is present in this process
+            ti_proc = np.where(frame_time[proc_num] == t)[0]
+            if len(ti_proc):
+                # Load in frame
+                proc_info = np.load(proc_dir + '/pset_info.npy',
+                                    allow_pickle=True).item()
+                proc_fhs = proc_info['file_list']
+
+                data = np.load(proc_dir + '/' + proc_fhs[ti_proc[0]].split('/')[-1],
+                               allow_pickle=True).item()
+
+                # Load indices and isnert into data dictionary
+                id_index = np.isin(array_id, data['id'])
+                # id_index_not = np.nonzero(~id_index)[0]
+                id_index     = np.nonzero(id_index)[0]
+
+                for var_name in var_names:
+                    # Insert into array
+                    np.put(var_data[var_name][:],
+                           id_index,
+                           data[var_name])
+
+                    # # Set other values to NaNs
+                    # np.put(var_data[var_name][:, ti],
+                    #        id_index_not,
+                    #        np.nan)
 
 
 
 
 
 
+    # First calculate the predicted size of the largest (64-bit) array of
+    # particles and check if this fits within system memory
+
+    # estimated_size = global_npart*global_ntime*8
+
+    # if estimated_size*1.5 < avail_mem:
+    #     mem_ok = True
+    # else:
+    #     mem_ok = False
+    #     raise NotImplementedError('Chunking not yet implemented!')
+
+    # if mem_ok:
+        #
+        # for proc_num, proc_dir in enumerate(dirs):
+        #     proc_info = np.load(proc_dir + '/pset_info.npy',
+        #                         allow_pickle=True).item()
+        #     proc_fhs = proc_info['file_list']
+
+        #     for fh_num, fh in enumerate(proc_fhs):
+        #         for var_name in var_names:
+        #             var_data = 1
 
 
 
-    print()
 
-
-
-
-
+        print()
 
 
 
@@ -437,7 +449,7 @@ if __name__ == "__main__":
     # f1_arr = f1.item()
 
     this_dir = os.path.dirname(os.path.realpath(__file__)) + '/test_output/'
-    out_dir  = this_dir + '/example_out.nc'
+    out_dir  = this_dir + 'example_out.nc'
 
     convert(this_dir, out_dir, fwd=False)
 
