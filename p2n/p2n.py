@@ -8,13 +8,11 @@ netcdf file.
 """
 
 # Import packages
-import psutil
 import os
 import parcels
 import numpy as np
 from glob import glob
 from netCDF4 import Dataset
-from time import time
 from alive_progress import alive_bar
 
 
@@ -38,7 +36,8 @@ def convert(dir_in, fh_out, **kwargs):
 
     '''
 
-    # IMPORTANT NOTE: CHUNKING IS NOT YET IMPLEMENTED!
+    # TO DO:
+    # Select which variables to include with kwargs
 
     # BASIC METHODOLOGY:
     # 1. Scan through numpy files to find out the total number of particles and
@@ -47,9 +46,6 @@ def convert(dir_in, fh_out, **kwargs):
     # 3. Incrementally fill the netcdf file
 
     ###########################################################################
-
-    # Detect available system memory
-    avail_mem = psutil.virtual_memory()[4]
 
     # Identify the number of parallel processes the parcels simulation was run
     # across
@@ -118,13 +114,27 @@ def convert(dir_in, fh_out, **kwargs):
             var_names.remove('time')
             var_names.remove('depth')
 
-            # var_data  = dict((name, []) for name in var_names)
             var_dtype = dict((name, []) for name in var_names)
 
             for var_name in var_names:
                 temp_fh = np.load(proc_dir + '/' + proc_fhs[0].split('/')[-1],
                                   allow_pickle=True).item()[var_name][0]
                 var_dtype[var_name] = temp_fh.dtype
+
+            # Check if any 'once' variables are included
+            if 'var_names_once' in proc_info:
+                if len(proc_info['var_names_once']) > 0:
+                    var_names_once = proc_info['var_names_once']
+                    proc_fhs_once = proc_info['file_list_once']
+                    once = True
+
+                    var_once_dtype = dict((name, []) for name in var_names_once)
+
+                    for var_name in var_names_once:
+                        temp_fh = np.load(proc_dir + '/' + proc_fhs_once[0].split('/')[-1],
+                                          allow_pickle=True).item()[var_name][0]
+                        var_once_dtype[var_name] = temp_fh.dtype
+
 
 
     # Now calculate the true global tmin, tmax, and idmax
@@ -196,7 +206,15 @@ def convert(dir_in, fh_out, **kwargs):
             nc.variables[var_name].long_name = long_name[var_name]
             nc.variables[var_name].units = units[var_name]
             nc.variables[var_name].standard_name = standard_name[var_name]
-            nc.variables[var_name].missing_value = -999
+            nc.variables[var_name].missing_value = missval
+
+        if once:
+            for var_name in var_names_once:
+                nc.createVariable(var_name, var_once_dtype[var_name].str[1:],
+                                  ('trajectory'), zlib=True,
+                                  complevel=clevel)
+                nc.variables[var_name].missing_value = missval
+
 
         nc.time_origin = global_torigin
 
@@ -213,6 +231,42 @@ def convert(dir_in, fh_out, **kwargs):
 
     print('Now writing netcdf file...')
 
+    # Firstly write 'once' variables if they exist (this is quick)
+    if once:
+        var_data = dict((name, []) for name in var_names_once)
+
+        for var_name in var_names_once:
+            # Shouldn't really be any missing values, but anyway
+            var_data[var_name] = missval*np.ones([global_npart,],
+                                                 dtype=var_once_dtype[var_name])
+
+        for proc_num, proc_dir in enumerate(dirs):
+            proc_info = np.load(proc_dir + '/pset_info.npy',
+                                allow_pickle=True).item()
+            proc_fhs_once = proc_info['file_list_once']
+
+            for fh in proc_fhs_once:
+                data = np.load(proc_dir + '/' + fh.split('/')[-1],
+                               allow_pickle=True).item()
+
+                # Check that particle ids are sorted (method is reliant on this)
+                if np.all(data['id'][:-1] < data['id'][1:]):
+                    # Load indices and insert into data dictionary
+                    id_index = np.isin(array_id, data['id'])
+                    # id_index_not = np.nonzero(~id_index)[0]
+                    id_index     = np.nonzero(id_index)[0]
+
+                    for var_name in var_names_once:
+                        # Insert into array
+                        np.put(var_data[var_name][:],
+                               id_index,
+                               data[var_name])
+
+        # Now write to netcdf
+        with Dataset(fh_out, mode='r+') as nc:
+            for var_name in var_names_once:
+                nc.variables[var_name][:] = var_data[var_name]
+
     with alive_bar(len(array_time), bar='smooth', spinner='dots_waves') as bar:
         for ti, t in enumerate(array_time):
             # var_data: dictionary that contains the data for variables for this
@@ -220,12 +274,9 @@ def convert(dir_in, fh_out, **kwargs):
             # var_data_present: dictionary that contains a 1 if data exists for the
             #           variable for this time slice
             var_data = dict((name, []) for name in var_names)
-            var_data_present = dict((name, []) for name in var_names)
+            # var_data_present = dict((name, []) for name in var_names)
 
             for var_name in var_names:
-                # var_data[var_name] = np.zeros([global_npart,],
-                #                                 dtype=var_dtype[var_name])
-                # var_data_present[var_name] = np.copy(var_data[var_name])
                 var_data[var_name] = missval*np.ones([global_npart,],
                                                      dtype=var_dtype[var_name])
 
@@ -261,8 +312,8 @@ def convert(dir_in, fh_out, **kwargs):
 
 
             # Now set all points without data to a fill value
-            for var_name in var_names:
-                var_data[var_name][var_data_present == 0] = -999
+            # for var_name in var_names:
+            #     var_data[var_name][var_data_present == 0] = -999
 
             # Now write to netcdf
             with Dataset(fh_out, mode='r+') as nc:
