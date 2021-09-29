@@ -9,6 +9,7 @@ netcdf file.
 
 # Import packages
 import os
+import sys
 import parcels
 import numpy as np
 from glob import glob
@@ -325,10 +326,25 @@ def convert(dir_in, fh_out, **kwargs):
 
 if __name__ == "__main__":
 
-    this_dir = os.path.dirname(os.path.realpath(__file__)) + '/1M_2019_test_raw/'
-    out_dir  = this_dir + 'p2n_output.nc'
+    '''
+    When run from the terminal, the first argument is the path to the directory
+    containing parcels output (i.e. folders 0, 1, 2...). The second argument is
+    the directory to the output and output name.
+    '''
 
-    convert(this_dir, out_dir, fwd=False)
+    this_dir = os.path.dirname(os.path.realpath(__file__)) + '/'
+
+    try:
+        parcels_output_dir = this_dir + sys.argv[1]
+        netcdf_fh = this_dir + sys.argv[2]
+
+        if parcels_output_dir[-1] != '/':
+            parcels_output_dir += '/'
+    except:
+        parcels_output_dir = this_dir + input('Please enter path to parcels numpy directory')
+        netcdf_fh = this_dir + input('Please enter path to output netcdf')
+
+    convert(parcels_output_dir, netcdf_fh)
 
 
 
