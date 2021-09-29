@@ -14,6 +14,8 @@ import parcels
 import numpy as np
 from glob import glob
 from netCDF4 import Dataset
+from time import time
+from alive_progress import alive_bar
 
 
 def convert(dir_in, fh_out, **kwargs):
@@ -94,7 +96,7 @@ def convert(dir_in, fh_out, **kwargs):
             # Check that the modal time step is accurate (>10% of total)
             if np.max(time_dt[1]) > len(frame_time[proc_num])/10:
                 time_dt = time_dt[0][np.argmax(time_dt[1])]
-                print('Confident time step found.')
+                print('Time step found.')
                 print('Time step set to ' + str(int(time_dt)) + 's')
                 print('')
             else:
@@ -131,9 +133,17 @@ def convert(dir_in, fh_out, **kwargs):
     global_idmax = np.max(global_idmax)
 
     # Now generate the time series
-    array_time = np.arange(global_tmin,
-                           global_tmax+np.abs(time_dt),
-                           np.abs(time_dt))
+    # Routine depends on state of fwd
+    if fwd:
+        array_time = np.arange(global_tmin,
+                               global_tmax+time_dt,
+                               time_dt)
+        array_time[-1] = global_tmax
+    else:
+        array_time = np.arange(global_tmax,
+                               global_tmin+time_dt,
+                               time_dt)
+        array_time[-1] = global_tmin
 
     # Now generate the ids
     array_id   = np.arange(0, global_idmax+1)
@@ -155,18 +165,25 @@ def convert(dir_in, fh_out, **kwargs):
     standard_name = {'lon' : 'longitude_degrees_east',
                      'lat' : 'latitude_degrees_north'}
 
+    # Define output parameters
+    # Missing values
+    missval = -999
+
+    # Compression level
+    clevel = 4
+
     with Dataset(fh_out, mode='w') as nc:
         # Create the dimensions
         nc.createDimension('trajectory', global_npart)
         nc.createDimension('time', global_ntime)
 
         # Create the variables
-        nc.createVariable('id', 'i4', ('trajectory'), zlib=True)
+        nc.createVariable('id', 'i4', ('trajectory'), zlib=True, complevel=clevel)
         nc.variables['id'].long_name = 'particle_id'
         nc.variables['id'].standard_name = 'id'
         nc.variables['id'][:] = array_id
 
-        nc.createVariable('time', 'f8', ('time'), zlib=True)
+        nc.createVariable('time', 'f8', ('time'), zlib=True, complevel=clevel)
         nc.variables['time'].long_name = 'particle_time'
         nc.variables['time'].standard_name = 'time'
         nc.variables['time'].standard_name = 'seconds since ' + global_torigin
@@ -174,7 +191,8 @@ def convert(dir_in, fh_out, **kwargs):
 
         for var_name in var_names:
             nc.createVariable(var_name, var_dtype[var_name].str[1:],
-                              ('trajectory', 'time'), zlib=True)
+                              ('trajectory', 'time'), zlib=True,
+                              complevel=clevel)
             nc.variables[var_name].long_name = long_name[var_name]
             nc.variables[var_name].units = units[var_name]
             nc.variables[var_name].standard_name = standard_name[var_name]
@@ -193,97 +211,74 @@ def convert(dir_in, fh_out, **kwargs):
     #       If so, add data for each variable to relevant vector
     # Copy to netcdf
 
-    for ti, t in enumerate(array_time):
-        print(ti)
-        # var_data: dictionary that contains the data for variables for this
-        #           time slice
-        # var_data_present: dictionary that contains a 1 if data exists for the
-        #           variable for this time slice
-        var_data = dict((name, []) for name in var_names)
-        var_data_present = dict((name, []) for name in var_names)
+    print('Now writing netcdf file...')
 
-        for var_name in var_names:
-            var_data[var_name] = np.zeros([global_npart,],
-                                            dtype=var_dtype[var_name])
-            var_data_present[var_name] = np.copy(var_data[var_name])
+    with alive_bar(len(array_time), bar='smooth', spinner='dots_waves') as bar:
+        for ti, t in enumerate(array_time):
+            # var_data: dictionary that contains the data for variables for this
+            #           time slice
+            # var_data_present: dictionary that contains a 1 if data exists for the
+            #           variable for this time slice
+            var_data = dict((name, []) for name in var_names)
+            var_data_present = dict((name, []) for name in var_names)
 
-        for proc_num, proc_dir in enumerate(dirs):
-            # Check if time is present in this process
-            ti_proc = np.where(frame_time[proc_num] == t)[0]
-            if len(ti_proc):
-                # Load in frame
-                proc_info = np.load(proc_dir + '/pset_info.npy',
-                                    allow_pickle=True).item()
-                proc_fhs = proc_info['file_list']
-
-                data = np.load(proc_dir + '/' + proc_fhs[ti_proc[0]].split('/')[-1],
-                               allow_pickle=True).item()
-
-                # Check that particle ids are sorted (method is reliant on this)
-                if np.all(data['id'][:-1] < data['id'][1:]):
-                    # Load indices and insert into data dictionary
-                    id_index = np.isin(array_id, data['id'])
-                    # id_index_not = np.nonzero(~id_index)[0]
-                    id_index     = np.nonzero(id_index)[0]
-
-                    for var_name in var_names:
-                        # Insert into array
-                        np.put(var_data[var_name][:],
-                               id_index,
-                               data[var_name])
-
-                        np.put(var_data_present[var_name][:],
-                               id_index,
-                               1)
-
-        # Now set all points without data to a fill value
-        for var_name in var_names:
-            var_data[var_name][var_data_present == 0] = -999
-
-        # Now write to netcdf
-        with Dataset(fh_out, mode='r+') as nc:
             for var_name in var_names:
-                nc.variables[var_name][:, ti] = var_data[var_name]
+                # var_data[var_name] = np.zeros([global_npart,],
+                #                                 dtype=var_dtype[var_name])
+                # var_data_present[var_name] = np.copy(var_data[var_name])
+                var_data[var_name] = missval*np.ones([global_npart,],
+                                                     dtype=var_dtype[var_name])
+
+            for proc_num, proc_dir in enumerate(dirs):
+                # Check if time is present in this process
+                ti_proc = np.where(frame_time[proc_num] == t)[0]
+
+                # Only continue if time is present [len(ti_proc) >= 1].
+                # I have no idea why parcels sometimes saves a frame as multiple
+                # files, but it does and we have to account for this.
+
+                for ti_proc_i in ti_proc:
+                    # Load in frame
+                    proc_info = np.load(proc_dir + '/pset_info.npy',
+                                        allow_pickle=True).item()
+                    proc_fhs = proc_info['file_list']
+
+                    data = np.load(proc_dir + '/' + proc_fhs[ti_proc_i].split('/')[-1],
+                                   allow_pickle=True).item()
+
+                    # Check that particle ids are sorted (method is reliant on this)
+                    if np.all(data['id'][:-1] < data['id'][1:]):
+                        # Load indices and insert into data dictionary
+                        id_index = np.isin(array_id, data['id'])
+                        # id_index_not = np.nonzero(~id_index)[0]
+                        id_index     = np.nonzero(id_index)[0]
+
+                        for var_name in var_names:
+                            # Insert into array
+                            np.put(var_data[var_name][:],
+                                   id_index,
+                                   data[var_name])
 
 
-    # First calculate the predicted size of the largest (64-bit) array of
-    # particles and check if this fits within system memory
+            # Now set all points without data to a fill value
+            for var_name in var_names:
+                var_data[var_name][var_data_present == 0] = -999
 
-    # estimated_size = global_npart*global_ntime*8
+            # Now write to netcdf
+            with Dataset(fh_out, mode='r+') as nc:
+                for var_name in var_names:
+                    nc.variables[var_name][:, ti] = var_data[var_name]
 
-    # if estimated_size*1.5 < avail_mem:
-    #     mem_ok = True
-    # else:
-    #     mem_ok = False
-    #     raise NotImplementedError('Chunking not yet implemented!')
-
-    # if mem_ok:
-        #
-        # for proc_num, proc_dir in enumerate(dirs):
-        #     proc_info = np.load(proc_dir + '/pset_info.npy',
-        #                         allow_pickle=True).item()
-        #     proc_fhs = proc_info['file_list']
-
-        #     for fh_num, fh in enumerate(proc_fhs):
-        #         for var_name in var_names:
-        #             var_data = 1
-
-
+            bar()
 
 
 if __name__ == "__main__":
-    print()
 
-    # example_dir = os.path.dirname(os.path.realpath(__file__)) + '/test_output'
-    # fh1 = example_dir + '/6/338.npy'
-
-    # f1  = np.load(fh1, allow_pickle=True)
-    # f1_arr = f1.item()
-
-    this_dir = os.path.dirname(os.path.realpath(__file__)) + '/test_output/'
-    out_dir  = this_dir + 'example_out.nc'
+    this_dir = os.path.dirname(os.path.realpath(__file__)) + '/1M_2019_test_raw/'
+    out_dir  = this_dir + 'p2n_output.nc'
 
     convert(this_dir, out_dir, fwd=False)
+
 
 
 
