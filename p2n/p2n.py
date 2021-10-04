@@ -11,6 +11,7 @@ netcdf file.
 import os
 import sys
 import parcels
+import psutil
 import numpy as np
 from glob import glob
 from netCDF4 import Dataset
@@ -53,6 +54,9 @@ def convert(dir_in, fh_out, **kwargs):
     dirs     = [x for x in glob(dir_in + '/*') if '.' not in x]
     nproc    = len(dirs)
 
+    # Detect available system memory
+    avail_mem = psutil.virtual_memory()[4]
+
     # Now scan through the processes to find out the following:
     # 1. Minimum time
     # 2. Maximum time
@@ -79,7 +83,7 @@ def convert(dir_in, fh_out, **kwargs):
             for fh_num, fh in enumerate(proc_fhs):
                 frame_time[proc_num][fh_num] = np.load(proc_dir + '/' + fh.split('/')[-1],
                                                        allow_pickle=True).item()['time'][0]
-                print(fh_num)
+                # print(fh_num)
 
             # Add the tmin, tmax and idmax to the lists
             global_idmax.append(proc_info['maxid_written'])
@@ -209,7 +213,7 @@ def convert(dir_in, fh_out, **kwargs):
             nc.variables[var_name].long_name = long_name[var_name]
             nc.variables[var_name].units = units[var_name]
             nc.variables[var_name].standard_name = standard_name[var_name]
-            nc.variables[var_name].missing_value = missval
+            nc.variables[var_name].missing_value = np.array([missval]).astype(var_dtype[var_name])[0]
 
         if once:
             for var_name in var_names_once:
@@ -270,60 +274,80 @@ def convert(dir_in, fh_out, **kwargs):
             for var_name in var_names_once:
                 nc.variables[var_name][:] = var_data[var_name]
 
+    # Now write the time-varying variables.
+    # To speed I/O time, we will write multiple time steps at once, depending
+    # on the available memory.
+
+    # Calculate the number of time steps that can be held in memory at once
+    # Maximum memory used by 1 time step:
+    # n_vars * n_part * 8
+
+    mem_per_ts = len(var_names)*global_npart*8
+    max_ts = int(avail_mem*0.8/mem_per_ts)
+
+    # Create a list of array times per it
+    t_per_it = []
+
+    for i in range(int(np.ceil(len(array_time)/max_ts))):
+        t_per_it.append(array_time[i*max_ts:(i+1)*max_ts])
+
     with alive_bar(len(array_time), bar='smooth', spinner='dots_waves') as bar:
-        for ti, t in enumerate(array_time):
+        for it, it_times in enumerate(t_per_it):
             # var_data: dictionary that contains the data for variables for this
             #           time slice
-            # var_data_present: dictionary that contains a 1 if data exists for the
-            #           variable for this time slice
             var_data = dict((name, []) for name in var_names)
-            # var_data_present = dict((name, []) for name in var_names)
+
+            # Number of time slices this iteration
+            t_this_it = len(it_times)
 
             for var_name in var_names:
-                var_data[var_name] = missval*np.ones([global_npart,],
+                var_data[var_name] = missval*np.ones([global_npart,t_this_it],
                                                      dtype=var_dtype[var_name])
 
-            for proc_num, proc_dir in enumerate(dirs):
-                # Check if time is present in this process
-                ti_proc = np.where(frame_time[proc_num] == t)[0]
+            for ti, t in enumerate(it_times):
+                for proc_num, proc_dir in enumerate(dirs):
+                    # Check if time is present in this process
+                    ti_proc = np.where(frame_time[proc_num] == t)[0]
 
-                # Only continue if time is present [len(ti_proc) >= 1].
-                # I have no idea why parcels sometimes saves a frame as multiple
-                # files, but it does and we have to account for this.
+                    # Only continue if time is present [len(ti_proc) >= 1].
+                    # I have no idea why parcels sometimes saves a frame as multiple
+                    # files, but it does and we have to account for this.
 
-                for ti_proc_i in ti_proc:
-                    # Load in frame
-                    proc_info = np.load(proc_dir + '/pset_info.npy',
-                                        allow_pickle=True).item()
-                    proc_fhs = proc_info['file_list']
+                    for ti_proc_i in ti_proc:
+                        # Load in frame
+                        proc_info = np.load(proc_dir + '/pset_info.npy',
+                                            allow_pickle=True).item()
+                        proc_fhs = proc_info['file_list']
 
-                    data = np.load(proc_dir + '/' + proc_fhs[ti_proc_i].split('/')[-1],
-                                   allow_pickle=True).item()
+                        # !! This is the time-limiting step... but I am not   !!
+                        # !! of any way to speed this up without changing the !!
+                        # !! parcels source code!                             !!
+                        data = np.load(proc_dir + '/' + proc_fhs[ti_proc_i].split('/')[-1],
+                                       allow_pickle=True).item()
 
-                    # Check that particle ids are sorted (method is reliant on this)
-                    if np.all(data['id'][:-1] < data['id'][1:]):
-                        # Load indices and insert into data dictionary
-                        id_index = np.isin(array_id, data['id'])
-                        # id_index_not = np.nonzero(~id_index)[0]
-                        id_index     = np.nonzero(id_index)[0]
+                        # Check that particle ids are sorted (method is reliant on this)
+                        if np.all(data['id'][:-1] < data['id'][1:]):
+                            # Load indices and insert into data dictionary
+                            id_index = np.isin(array_id, data['id'])
+                            # id_index_not = np.nonzero(~id_index)[0]
+                            id_index     = np.nonzero(id_index)[0]
 
-                        for var_name in var_names:
-                            # Insert into array
-                            np.put(var_data[var_name][:],
-                                   id_index,
-                                   data[var_name])
+                            for var_name in var_names:
+                                # Insert into array
+                                np.put(var_data[var_name][:, ti],
+                                       id_index,
+                                       data[var_name])
 
-
-            # Now set all points without data to a fill value
-            # for var_name in var_names:
-            #     var_data[var_name][var_data_present == 0] = -999
+                # Increment bar every time step
+                bar()
 
             # Now write to netcdf
             with Dataset(fh_out, mode='r+') as nc:
                 for var_name in var_names:
-                    nc.variables[var_name][:, ti] = var_data[var_name]
-
-            bar()
+                    if it == len(t_per_it)-1:
+                        nc.variables[var_name][:, it*max_ts:] = var_data[var_name]
+                    else:
+                        nc.variables[var_name][:, it*max_ts:(it+1)*max_ts] = var_data[var_name]
 
 
 if __name__ == "__main__":
