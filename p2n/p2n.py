@@ -64,79 +64,81 @@ def convert(dir_in, fh_out, **kwargs):
 
     frame_time = dict((directory, []) for directory in range(nproc))
 
-    for proc_num, proc_dir in enumerate(dirs):
-        # Load the info file for the current process
-        proc_info = np.load(proc_dir + '/pset_info.npy',
-                            allow_pickle=True).item()
-        proc_fhs = proc_info['file_list']
+    print('Scanning times...')
 
-        # Record the time of every file
-        frame_time[proc_num] = np.zeros([len(proc_fhs),], dtype=np.float64)
+    with alive_bar(bar='classic', spinner='dots_waves') as bar:
+        for proc_num, proc_dir in enumerate(dirs):
+            # Load the info file for the current process
+            proc_info = np.load(proc_dir + '/pset_info.npy',
+                                allow_pickle=True).item()
+            proc_fhs = proc_info['file_list']
 
-        for fh_num, fh in enumerate(proc_fhs):
-            frame_time[proc_num][fh_num] = np.load(proc_dir + '/' + fh.split('/')[-1],
-                                                   allow_pickle=True).item()['time'][0]
+            # Record the time of every file
+            frame_time[proc_num] = np.zeros([len(proc_fhs),], dtype=np.float64)
 
-        # Add the tmin, tmax and idmax to the lists
-        global_idmax.append(proc_info['maxid_written'])
-        global_tmin.append(np.min(frame_time[proc_num]))
-        global_tmax.append(np.max(frame_time[proc_num]))
+            for fh_num, fh in enumerate(proc_fhs):
+                frame_time[proc_num][fh_num] = np.load(proc_dir + '/' + fh.split('/')[-1],
+                                                       allow_pickle=True).item()['time'][0]
+                print(fh_num)
 
-        if proc_num == 0:
-            # Record time origin
-            global_torigin = np.datetime_as_string(proc_info['time_origin'].time_origin)
+            # Add the tmin, tmax and idmax to the lists
+            global_idmax.append(proc_info['maxid_written'])
+            global_tmin.append(np.min(frame_time[proc_num]))
+            global_tmax.append(np.max(frame_time[proc_num]))
 
-            # Calculate the time step
-            time_dt = np.unique(np.gradient(np.array(frame_time[proc_num])),
-                                return_counts=True)
+            if proc_num == 0:
+                # Record time origin
+                global_torigin = np.datetime_as_string(proc_info['time_origin'].time_origin)
 
-            # Check that the modal time step is accurate (>10% of total)
-            if np.max(time_dt[1]) > len(frame_time[proc_num])/10:
-                time_dt = time_dt[0][np.argmax(time_dt[1])]
-                print('Time step found.')
-                print('Time step set to ' + str(int(time_dt)) + 's')
-                print('')
-            else:
-                print('Could not find reliable time step.')
-                time_dt = float(input('Please enter the time step in seconds:'))
+                # Calculate the time step
+                time_dt = np.unique(np.gradient(np.array(frame_time[proc_num])),
+                                    return_counts=True)
 
-            if time_dt > 0:
-                fwd = True
-            else:
-                fwd = False
+                # Check that the modal time step is accurate (>10% of total)
+                if np.max(time_dt[1]) > len(frame_time[proc_num])/10:
+                    time_dt = time_dt[0][np.argmax(time_dt[1])]
+                    print('Time step found.')
+                    print('Time step set to ' + str(int(time_dt)) + 's')
+                    print('')
+                else:
+                    print('Could not find reliable time step.')
+                    time_dt = float(input('Please enter the time step in seconds:'))
 
-            # Create a dict to hold all of the variables and datatypes
-            var_names = proc_info['var_names']
+                if time_dt > 0:
+                    fwd = True
+                else:
+                    fwd = False
 
-            # Remove id, time and depth (id and time are recorded as 1D arrays to
-            # save space, and depth is not needed at the moment)
+                # Create a dict to hold all of the variables and datatypes
+                var_names = proc_info['var_names']
 
-            var_names.remove('id')
-            var_names.remove('time')
-            var_names.remove('depth')
+                # Remove id, time and depth (id and time are recorded as 1D arrays to
+                # save space, and depth is not needed at the moment)
 
-            var_dtype = dict((name, []) for name in var_names)
+                var_names.remove('id')
+                var_names.remove('time')
+                var_names.remove('depth')
 
-            for var_name in var_names:
-                temp_fh = np.load(proc_dir + '/' + proc_fhs[0].split('/')[-1],
-                                  allow_pickle=True).item()[var_name][0]
-                var_dtype[var_name] = temp_fh.dtype
+                var_dtype = dict((name, []) for name in var_names)
 
-            # Check if any 'once' variables are included
-            if 'var_names_once' in proc_info:
-                if len(proc_info['var_names_once']) > 0:
-                    var_names_once = proc_info['var_names_once']
-                    proc_fhs_once = proc_info['file_list_once']
-                    once = True
+                for var_name in var_names:
+                    temp_fh = np.load(proc_dir + '/' + proc_fhs[0].split('/')[-1],
+                                      allow_pickle=True).item()[var_name][0]
+                    var_dtype[var_name] = temp_fh.dtype
 
-                    var_once_dtype = dict((name, []) for name in var_names_once)
+                # Check if any 'once' variables are included
+                if 'var_names_once' in proc_info:
+                    if len(proc_info['var_names_once']) > 0:
+                        var_names_once = proc_info['var_names_once']
+                        proc_fhs_once = proc_info['file_list_once']
+                        once = True
 
-                    for var_name in var_names_once:
-                        temp_fh = np.load(proc_dir + '/' + proc_fhs_once[0].split('/')[-1],
-                                          allow_pickle=True).item()[var_name][0]
-                        var_once_dtype[var_name] = temp_fh.dtype
+                        var_once_dtype = dict((name, []) for name in var_names_once)
 
-
+                        for var_name in var_names_once:
+                            temp_fh = np.load(proc_dir + '/' + proc_fhs_once[0].split('/')[-1],
+                                              allow_pickle=True).item()[var_name][0]
+                            var_once_dtype[var_name] = temp_fh.dtype
 
     # Now calculate the true global tmin, tmax, and idmax
     global_tmax = np.max(global_tmax)
