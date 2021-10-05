@@ -23,19 +23,20 @@ from glob import glob
 param = {# Release timing
          'Ymin'              : 2019,          # First release year
          'Ymax'              : 2019,          # Last release year
-         'Mmin'              : 2   ,          # First release month
+         'Mmin'              : 12   ,          # First release month
          'Mmax'              : 12  ,          # Last release month
          'RPM'               : 1   ,          # Releases per month
          'mode'              :'START',        # Release at END or START
 
          # Release location
          'id'                : [690],         # ISO IDs of release countries
-         'pn'                : 2    ,         # Particles to release per cell
+         'pn'                : 100    ,         # Particles to release per cell
 
          # Simulation parameters
          'stokes'            : True,          # Toggle to use Stokes drift
          'windage'           : False,         # Toggle to use windage
          'fw'                : 0.0,           # Windage fraction
+         'max_age'           : 1.,           # Max age (years). 0 == inf.
 
          # Runtime parameters
          'Yend'              : 2019,          # Last year of simulation
@@ -202,6 +203,10 @@ fieldset.add_constant('halo_west', -180.)
 fieldset.add_constant('halo_east', 180.)
 fieldset.add_periodic_halo(zonal=True)
 
+# ADD MAXIMUM PARTICLE AGE (IF LIMITED AGE)
+if param['max_age']:
+    fieldset.add_constant('max_age', param['max_age']*3600*24*365.25)
+
 ##############################################################################
 # KERNELS                                                                    #
 ##############################################################################
@@ -269,6 +274,13 @@ def deleteParticle(particle, fieldset, time):
     #  Recovery kernel to delete a particle if it leaves the domain
     #  (possible in certain configurations)
     particle.delete()
+
+def oldParticle(particle, fieldset, time):
+    # Remove particles older than given age
+    particle.ot -= particle.dt
+
+    if particle.ot > fieldset.max_age:
+        particle.delete()
 
 def periodicBC(particle, fieldset, time):
     # Move the particle across the periodic boundary
