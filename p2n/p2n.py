@@ -106,7 +106,8 @@ def convert(dir_in, fh_out, **kwargs):
                     print('')
                 else:
                     print('Could not find reliable time step.')
-                    time_dt = float(input('Please enter the time step in seconds:'))
+                    time_dt = input('Please enter the time step in seconds:')
+                    time_dt = float(time_dt)
 
                 if time_dt > 0:
                     fwd = True
