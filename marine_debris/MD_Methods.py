@@ -269,29 +269,13 @@ def release_loc(param, fh):
     # 3. Calculate the valid part of that psi cell to populate
     # 4. Calculate the coordinates of the resulting particles
 
-    # Firstly calculate the basic particle grid (referenced to the psi point)
+    # Firstly calculate the basic particle grid
     dX = lon_rho[1] - lon_rho[0]  # Grid spacing
-
-    pn += 1 if pn%2 != 0 else 0   # Ensure that pn is even
-    dx = dX/pn
-
-    gx = np.linspace((-dX/2 + dx/2), (dX/2 - dx/2), num=pn)
-    gy = gx
-
-    gx, gy = np.meshgrid(gx, gy)
-
-    gridx = {'SW': gx[:int(pn/2), :int(pn/2)].flatten(),
-             'SE': gx[:int(pn/2), int(pn/2):].flatten(),
-             'NW': gx[int(pn/2):, :int(pn/2)].flatten(),
-             'NE': gx[int(pn/2):, int(pn/2):].flatten()}
-
-    gridy = {'SW': gy[:int(pn/2), :int(pn/2)].flatten(),
-             'SE': gy[:int(pn/2), int(pn/2):].flatten(),
-             'NW': gy[int(pn/2):, :int(pn/2)].flatten(),
-             'NE': gy[int(pn/2):, int(pn/2):].flatten()}
+    dx = dX/pn                    # Particle spacing
+    gx = gy = np.linspace((-dX/2 + dx/2), (dX/2 - dx/2), num=pn)
+    gridx, gridy = [grid.flatten() for grid in np.meshgrid(gx, gy)]
 
     nl  = idx[0].shape[0]  # Number of locations
-    bl  = len(gridx['SW']) # Block length (number of particles)
 
     lon_out = np.array([], dtype=np.float64)
     lat_out = np.array([], dtype=np.float64)
@@ -308,43 +292,16 @@ def release_loc(param, fh):
         loc_id   = id_psi[loc_yidx, loc_xidx]
         loc_iso  = iso_psi[loc_yidx, loc_xidx]
 
-        loc_lsm = lsm_rho[loc_yidx:loc_yidx+2, loc_xidx:loc_xidx+2]
+        lon_out = np.append(lon_out, gridx + loc_x)
+        lat_out = np.append(lat_out, gridy + loc_y)
+        iso_out = np.append(iso_out, np.ones(np.shape(lon_out),
+                                             dtype=np.int16)*loc_iso)
+        id_out = np.append(id_out, np.ones(np.shape(lon_out),
+                                           dtype=np.int32)*loc_id)
 
-        # Generate the local coordinate set
-        if loc_lsm[0, 0] == 0:
-            # Add the SW points
-            lon_out = np.append(lon_out, gridx['SW'] + loc_x)
-            lat_out = np.append(lat_out, gridy['SW'] + loc_y)
-            iso_out = np.append(iso_out, np.ones((bl,))*loc_iso)
-            id_out = np.append(id_out, np.ones((bl,))*loc_id)
 
-        if loc_lsm[0, 1] == 0:
-            # Add the SE points
-            lon_out = np.append(lon_out, gridx['SE'] + loc_x)
-            lat_out = np.append(lat_out, gridy['SE'] + loc_y)
-            iso_out = np.append(iso_out, np.ones((bl,))*loc_iso)
-            id_out = np.append(id_out, np.ones((bl,))*loc_id)
-
-        if loc_lsm[1, 0] == 0:
-            # Add the NW points
-            lon_out = np.append(lon_out, gridx['NW'] + loc_x)
-            lat_out = np.append(lat_out, gridy['NW'] + loc_y)
-            iso_out = np.append(iso_out, np.ones((bl,))*loc_iso)
-            id_out = np.append(id_out, np.ones((bl,))*loc_id)
-
-        if loc_lsm[1, 1] == 0:
-            # Add the NE points
-            lon_out = np.append(lon_out, gridx['NE'] + loc_x)
-            lat_out = np.append(lat_out, gridy['NE'] + loc_y)
-            iso_out = np.append(iso_out, np.ones((bl,))*loc_iso)
-            id_out = np.append(id_out, np.ones((bl,))*loc_id)
 
     # Now distribute trajectories across processes
-    # if param['nproc'] <= 123:
-    #     proc_out = np.zeros(np.shape(id_out), dtype=np.int8)
-    # else:
-    #     proc_out = np.zeros(np.shape(id_out), dtype=np.int16)
-
     proc_out = np.repeat(np.arange(param['nproc'],
                                    dtype=(np.int16 if param['nproc'] > 123 else np.int8)),
                          int(np.ceil(len(id_out)/param['nproc'])))

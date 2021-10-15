@@ -313,7 +313,7 @@ traj.export()
 
 if param['test']:
     # Set display region
-    (lon_min, lon_max, lat_min, lat_max) = (46.0, 46.6, -9.6, -9.25)
+    (lon_min, lon_max, lat_min, lat_max) = (46.0, 56, -12, -2)
 
     # Import grids
     with Dataset(fh['grid'], mode='r') as nc:
