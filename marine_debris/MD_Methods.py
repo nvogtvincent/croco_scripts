@@ -294,9 +294,9 @@ def release_loc(param, fh):
 
         lon_out = np.append(lon_out, gridx + loc_x)
         lat_out = np.append(lat_out, gridy + loc_y)
-        iso_out = np.append(iso_out, np.ones(np.shape(lon_out),
+        iso_out = np.append(iso_out, np.ones(np.shape(gridx),
                                              dtype=np.int16)*loc_iso)
-        id_out = np.append(id_out, np.ones(np.shape(lon_out),
+        id_out = np.append(id_out, np.ones(np.shape(gridx),
                                            dtype=np.int32)*loc_id)
 
 

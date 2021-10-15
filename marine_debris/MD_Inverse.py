@@ -34,31 +34,32 @@ param = {# Release timing
 
          # Release location
          'id'                : [690],         # ISO IDs of release countries
-         'pn'                :  16,         # Particles to release per cell
+         'pn'                :  2500,           # Particles to release per cell
 
          # Simulation parameters
          'stokes'            : True,          # Toggle to use Stokes drift
          'windage'           : False,         # Toggle to use windage
          'fw'                : 0.0,           # Windage fraction
-         'max_age'           : 0,            # Max age (years). 0 == inf.
+         'max_age'           : 0,             # Max age (years). 0 == inf.
 
          # Runtime parameters
-         'Yend'              : 2019,          # Last year of simulation
-         'Mend'              : 11  ,          # Last month
-         'Dend'              : 25   ,          # Last day (00:00, start)
-         'dt_RK4'            : timedelta(minutes=-30),  # RK4 time-step
+         'Yend'              : 2019,                   # Last year of simulation
+         'Mend'              : 11  ,                   # Last month
+         'Dend'              : 25   ,                  # Last day (00:00, start)
+         'dt_RK4'            : timedelta(minutes=-30), # RK4 time-step
 
          # Output parameters
-         'dt_out'            : timedelta(hours=1),   # Output frequency
-         'fn_out'            : '1M_f8_test.nc',      # Output filename
+         'dt_out'            : timedelta(hours=1),     # Output frequency
+         'fn_out'            : '1M_f8_test.nc',        # Output filename
 
          # Other parameters
          'update'            : True,                   # Update grid files
          'plastic'           : True,                   # Write plastic data
+         'add_sey'           : True,                   # Add extra Sey islands
          'p_param'           : {'l'  : 50.,            # Plastic length scale
                                 'cr' : 0.15},          # Fraction entering sea
 
-         'test'              : True,                   # Activate test mode
+         'test'              : False,                   # Activate test mode
          'line_rel'          : False,}                 # Release particles in line
 
 # DIRECTORIES
@@ -107,7 +108,7 @@ with Dataset(fh['ocean'][0], 'r') as nc:
                                 month=param['Mend'],
                                 day=param['Dend'])
 
-grid = mdm.gridgen(fh, dirs, param, plastic=True)
+grid = mdm.gridgen(fh, dirs, param, plastic=True, add_seychelles=True)
 
 # Calculate the times for particle releases
 particles = {'time_array' : mdm.release_time(param, mode=param['mode'])}
@@ -288,7 +289,8 @@ pset = ParticleSet.from_list(fieldset=fieldset,
                              lon  = particles['pos']['lon'],
                              lat  = particles['pos']['lat'],
                              time = particles['pos']['time'],
-                             partitions = particles['pos']['partitions'])
+                             partitions = particles['pos']['partitions']
+                             )
 print(str(len(particles['pos']['time'])) + ' particles released!')
 
 traj = pset.ParticleFile(name=fh['traj'],
