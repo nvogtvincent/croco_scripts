@@ -305,11 +305,6 @@ def release_loc(param, fh):
         loc_y = lat_psi[loc_yidx]
         loc_x = lon_psi[loc_xidx]
 
-        # loc_ymin = lat_rho[loc_yidx]
-        # loc_ymax = lat_rho[loc_yidx+1]
-        # loc_xmin = lon_rho[loc_xidx]
-        # loc_xmax = lon_rho[loc_xidx+1]
-
         loc_id   = id_psi[loc_yidx, loc_xidx]
         loc_iso  = iso_psi[loc_yidx, loc_xidx]
 
@@ -344,10 +339,22 @@ def release_loc(param, fh):
             iso_out = np.append(iso_out, np.ones((bl,))*loc_iso)
             id_out = np.append(id_out, np.ones((bl,))*loc_id)
 
+    # Now distribute trajectories across processes
+    # if param['nproc'] <= 123:
+    #     proc_out = np.zeros(np.shape(id_out), dtype=np.int8)
+    # else:
+    #     proc_out = np.zeros(np.shape(id_out), dtype=np.int16)
+
+    proc_out = np.repeat(np.arange(param['nproc'],
+                                   dtype=(np.int16 if param['nproc'] > 123 else np.int8)),
+                         int(np.ceil(len(id_out)/param['nproc'])))
+
+
     pos0 = {'lon': lon_out,
             'lat': lat_out,
             'iso': iso_out,
-            'id': id_out}
+            'id': id_out,
+            'partitions' : proc_out}
 
     return pos0
 
@@ -365,6 +372,7 @@ def add_times(particles):
     data['lat']  = np.tile(data['lat'], ntimes)
     data['iso']  = np.tile(data['iso'], ntimes)
     data['id']   = np.tile(data['id'], ntimes)
+    data['partitions']   = np.tile(data['partitions'], ntimes)
     data['time'] = np.repeat(times, npart)
 
     return data

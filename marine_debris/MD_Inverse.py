@@ -12,10 +12,12 @@ import numpy as np
 import matplotlib.pyplot as plt
 import cmocean.cm as cm
 from parcels import (Field, FieldSet, ParticleSet, JITParticle, AdvectionRK4,
-                     ErrorCode, Geographic, GeographicPolar, Variable)
+                     ErrorCode, Geographic, GeographicPolar, Variable,
+                     ParcelsRandom)
 from netCDF4 import Dataset, num2date
 from datetime import timedelta, datetime
 from glob import glob
+from mpi4py import MPI
 
 ##############################################################################
 # DIRECTORIES & PARAMETERS                                                   #
@@ -32,13 +34,13 @@ param = {# Release timing
 
          # Release location
          'id'                : [690],         # ISO IDs of release countries
-         'pn'                : 100    ,         # Particles to release per cell
+         'pn'                :  16,         # Particles to release per cell
 
          # Simulation parameters
          'stokes'            : True,          # Toggle to use Stokes drift
          'windage'           : False,         # Toggle to use windage
          'fw'                : 0.0,           # Windage fraction
-         'max_age'           : 1.,           # Max age (years). 0 == inf.
+         'max_age'           : 0,            # Max age (years). 0 == inf.
 
          # Runtime parameters
          'Yend'              : 2019,          # Last year of simulation
@@ -47,19 +49,21 @@ param = {# Release timing
          'dt_RK4'            : timedelta(minutes=-30),  # RK4 time-step
 
          # Output parameters
-         'dt_out'            : timedelta(hours=1),     # Output frequency
-         'fn_out'            : 'test.nc',              # Output filename
+         'dt_out'            : timedelta(hours=1),   # Output frequency
+         'fn_out'            : '1M_f8_test.nc',      # Output filename
 
          # Other parameters
          'update'            : True,                   # Update grid files
          'plastic'           : True,                   # Write plastic data
          'p_param'           : {'l'  : 50.,            # Plastic length scale
                                 'cr' : 0.15},          # Fraction entering sea
-         'test'              : True}                   # Activate test mode
+
+         'test'              : True,                   # Activate test mode
+         'line_rel'          : False,}                 # Release particles in line
 
 # DIRECTORIES
 dirs = {'script': os.path.dirname(os.path.realpath(__file__)),
-        'model': os.path.dirname(os.path.realpath(__file__)) + '/MODEL_DATA/',
+        'model': os.path.dirname(os.path.realpath(__file__)) + '/MODEL_DATA_NEW/',
         'grid': os.path.dirname(os.path.realpath(__file__)) + '/GRID_DATA/',
         'plastic': os.path.dirname(os.path.realpath(__file__)) + '/PLASTIC_DATA/',
         'traj': os.path.dirname(os.path.realpath(__file__)) + '/TRAJ/'}
@@ -108,32 +112,36 @@ grid = mdm.gridgen(fh, dirs, param, plastic=True)
 # Calculate the times for particle releases
 particles = {'time_array' : mdm.release_time(param, mode=param['mode'])}
 
-# Calculate the locations for particle releases
+# Calculate number of processes
+param['nproc'] = MPI.COMM_WORLD.Get_size()
+
+# Calculate the locations, ids, procs for particle releases
 if not param['test']:
     particles['loc_array'] = mdm.release_loc(param, fh)
 else:
-    # For testing mode, initialise a small number of particles in a small grid
-    particles['loc_array'] = {}
-    particles['loc_array']['lon0'] = 49.2
-    particles['loc_array']['lon1'] = 49.2
-    particles['loc_array']['lat0'] = -12.4
-    particles['loc_array']['lat1'] = -11.8
+    if param['line_rel']:
+        particles['loc_array'] = {}
+        particles['loc_array']['lon0'] = 49.35
+        particles['loc_array']['lon1'] = 49.35
+        particles['loc_array']['lat0'] = -12.05
+        particles['loc_array']['lat1'] = -12.2
 
-    particles['loc_array']['ll'] = [np.linspace(particles['loc_array']['lon0'],
-                                                particles['loc_array']['lon1'],
-                                                num=10),
-                                    np.linspace(particles['loc_array']['lat0'],
-                                                particles['loc_array']['lat1'],
-                                                num=10),]
+        particles['loc_array']['ll'] = [np.linspace(particles['loc_array']['lon0'],
+                                                    particles['loc_array']['lon1'],
+                                                    num=10),
+                                        np.linspace(particles['loc_array']['lat0'],
+                                                    particles['loc_array']['lat1'],
+                                                    num=10),]
 
 
-    particles['loc_array']['lon'] = particles['loc_array']['ll'][0].flatten()
-    particles['loc_array']['lat'] = particles['loc_array']['ll'][1].flatten()
+        particles['loc_array']['lon'] = particles['loc_array']['ll'][0].flatten()
+        particles['loc_array']['lat'] = particles['loc_array']['ll'][1].flatten()
 
-    particles['loc_array']['iso'] = np.zeros_like(particles['loc_array']['lon'])
-    particles['loc_array']['id'] = np.zeros_like(particles['loc_array']['lon'])
+        particles['loc_array']['iso'] = np.zeros_like(particles['loc_array']['lon'])
+        particles['loc_array']['id'] = np.zeros_like(particles['loc_array']['lon'])
+    else:
+        particles['loc_array'] = mdm.release_loc(param, fh)
 
-    print()
 
 # Calculate a final array of release positions, IDs, and times
 particles['pos'] = mdm.add_times(particles)
@@ -160,7 +168,11 @@ variables = {'U': 'uo',
 dimensions = {'U': {'lon': 'longitude', 'lat': 'latitude', 'time': 'time'},
               'V': {'lon': 'longitude', 'lat': 'latitude', 'time': 'time'}}
 
+interp_method = {'U' : 'freeslip',
+                 'V' : 'freeslip'}
+
 fieldset_ocean = FieldSet.from_netcdf(filenames, variables, dimensions,
+                                      interp_method=interp_method,
                                       chunksize=False)
 
 # WAVE (STOKES FROM WAVERYS W/ GLORYS12V1)
@@ -169,11 +181,15 @@ filenames = fh['wave']
 variables = {'U': 'VSDX',
              'V': 'VSDY'}
 
-dimensions = {'U': {'lon': 'longitude', 'lat': 'latitude', 'time': 'time'},
-              'V': {'lon': 'longitude', 'lat': 'latitude', 'time': 'time'}}
+dimensions = {'U': {'lon': 'lon_rho', 'lat': 'lat_rho', 'time': 'time'},
+              'V': {'lon': 'lon_rho', 'lat': 'lat_rho', 'time': 'time'}}
+
+interp_method = {'U' : 'freeslip',
+                 'V' : 'freeslip'}
 
 fieldset_wave = FieldSet.from_netcdf(filenames, variables, dimensions,
-                                      chunksize=False)
+                                     interp_method=interp_method,
+                                     chunksize=False)
 
 fieldset = FieldSet(U=fieldset_ocean.U+fieldset_wave.U,
                     V=fieldset_ocean.V+fieldset_wave.V)
@@ -193,37 +209,37 @@ id_psi  = Field.from_netcdf(fh['grid'],
                             interp_method='nearest',
                             allow_time_extrapolation=True)
 
-cdist   = Field.from_netcdf(fh['grid'],
-                            variable='cdist_rho',
-                            dimensions={'lon': 'lon_rho',
-                                        'lat': 'lat_rho'},
-                            interp_method='linear',
-                            allow_time_extrapolation=True)
+# cdist   = Field.from_netcdf(fh['grid'],
+#                             variable='cdist_rho',
+#                             dimensions={'lon': 'lon_rho',
+#                                         'lat': 'lat_rho'},
+#                             interp_method='linear',
+#                             allow_time_extrapolation=True)
 
-cnormx  = Field.from_netcdf(fh['grid'],
-                            variable='cnormx_rho',
-                            dimensions={'lon': 'lon_rho',
-                                        'lat': 'lat_rho'},
-                            interp_method='linear',
-                            mesh='spherical',
-                            allow_time_extrapolation=True)
+# cnormx  = Field.from_netcdf(fh['grid'],
+#                             variable='cnormx_rho',
+#                             dimensions={'lon': 'lon_rho',
+#                                         'lat': 'lat_rho'},
+#                             interp_method='linear',
+#                             mesh='spherical',
+#                             allow_time_extrapolation=True)
 
-cnormy  = Field.from_netcdf(fh['grid'],
-                            variable='cnormy_rho',
-                            dimensions={'lon': 'lon_rho',
-                                        'lat': 'lat_rho'},
-                            interp_method='linear',
-                            mesh='spherical',
-                            allow_time_extrapolation=True)
+# cnormy  = Field.from_netcdf(fh['grid'],
+#                             variable='cnormy_rho',
+#                             dimensions={'lon': 'lon_rho',
+#                                         'lat': 'lat_rho'},
+#                             interp_method='linear',
+#                             mesh='spherical',
+#                             allow_time_extrapolation=True)
 
-fieldset.add_field(cdist)
+# fieldset.add_field(cdist)
 fieldset.add_field(id_psi)
-fieldset.add_field(cnormx)
-fieldset.add_field(cnormy)
+# fieldset.add_field(cnormx)
+# fieldset.add_field(cnormy)
 fieldset.add_field(lsm_rho)
 
-fieldset.cnormx_rho.units = GeographicPolar()
-fieldset.cnormy_rho.units = Geographic()
+# fieldset.cnormx_rho.units = GeographicPolar()
+# fieldset.cnormy_rho.units = Geographic()
 
 # ADD THE PERIODIC BOUNDARY
 fieldset.add_constant('halo_west', -180.)
@@ -252,10 +268,10 @@ class debris(JITParticle):
                    to_write='once')
 
     # Particle distance from land
-    cd  = Variable('cd',
-                   dtype=np.float32,
-                   initial=0.,
-                   to_write=False)
+    # cd  = Variable('cd',
+    #                dtype=np.float32,
+    #                initial=0.,
+    #                to_write=False)
 
     # Time at sea (ocean time)
     ot  = Variable('ot',
@@ -264,43 +280,50 @@ class debris(JITParticle):
                    to_write=False)
 
     # Velocity away from coast (to prevent beaching)
-    uc  = Variable('uc',
-                   dtype=np.float32,
-                   initial=0.,
-                   to_write=False)
+    # uc  = Variable('uc',
+    #                dtype=np.float32,
+    #                initial=0.,
+    #                to_write=False)
 
-    vc  = Variable('vc',
-                   dtype=np.float32,
-                   initial=0.,
-                   to_write=False)
+    # vc  = Variable('vc',
+    #                dtype=np.float32,
+    #                initial=0.,
+    #                to_write=False)
 
 
 def beach(particle, fieldset, time):
     #  Recovery kernel to delete a particle if it is beached
     particle.lsm = fieldset.lsm_rho[particle]
+    # particle.lsm = ParcelsRandom.random()
 
-    if particle.lsm >= 0.999:
+    if particle.lsm == 1.0:
         particle.delete()
 
-def antibeach(particle, fieldset, time):
-    #  Kernel to repel particles from the coast
-    particle.cd = fieldset.cdist_rho[particle]
+# def antibeach(particle, fieldset, time):
+#     #  Kernel to repel particles from the coast
+#     particle.cd = fieldset.cdist_rho[particle]
 
-    if particle.cd < 0.5:
+#     if particle.cd < 0.5:
 
-        particle.uc = fieldset.cnormx_rho[particle]
-        particle.vc = fieldset.cnormy_rho[particle]
+#         particle.uc = fieldset.cnormx_rho[particle]
+#         particle.vc = fieldset.cnormy_rho[particle]
 
-        particle.uc *= -1*(particle.cd - 0.5)**2
-        particle.vc *= -1*(particle.cd - 0.5)**2
+#         particle.uc *= -1*(particle.cd - 0.5)**2
+#         particle.vc *= -1*(particle.cd - 0.5)**2
 
-        particle.lon += particle.uc*particle.dt
-        particle.lat += particle.vc*particle.dt
+#         particle.lon += particle.uc*particle.dt
+#         particle.lat += particle.vc*particle.dt
 
 def deleteParticle(particle, fieldset, time):
     #  Recovery kernel to delete a particle if it leaves the domain
     #  (possible in certain configurations)
     particle.delete()
+
+def shiftParticle(particle, fieldset, time):
+    #  Recovery kernel to shift a particle if it returns an interpolation error
+    #  Shift particle by 1m
+    particle.lon += 1e-5
+    particle.lat += 1e-5
 
 def oldParticle(particle, fieldset, time):
     # Remove particles older than given age
@@ -319,18 +342,21 @@ def periodicBC(particle, fieldset, time):
 ##############################################################################
 # INITIALISE SIMULATION AND RUN                                              #
 ##############################################################################
+
 pset = ParticleSet.from_list(fieldset=fieldset,
                              pclass=debris,
+                             lonlatdepth_dtype=np.float64,
                              lon  = particles['pos']['lon'],
                              lat  = particles['pos']['lat'],
-                             time = particles['pos']['time'])
+                             time = particles['pos']['time'],
+                             partitions = particles['pos']['partitions'])
 print(str(len(particles['pos']['time'])) + ' particles released!')
 
 traj = pset.ParticleFile(name=fh['traj'],
                          outputdt=param['dt_out'])
 
 kernels = (pset.Kernel(AdvectionRK4) +
-           pset.Kernel(antibeach) +
+           # pset.Kernel(antibeach) +
            pset.Kernel(beach) +
            pset.Kernel(periodicBC))
 
@@ -349,7 +375,7 @@ traj.export()
 
 if param['test']:
     # Set display region
-    (lon_min, lon_max, lat_min, lat_max) = (48.7, 49.7, -12.5, -11.5)
+    (lon_min, lon_max, lat_min, lat_max) = (46.0, 46.6, -9.6, -9.25)
 
     # Import grids
     with Dataset(fh['grid'], mode='r') as nc:
@@ -446,22 +472,12 @@ if param['test']:
     with Dataset(fh['traj'], mode='r') as nc:
         plat  = nc.variables['lat'][:]
         plon  = nc.variables['lon'][:]
-        # pstate = nc.variables['lsm'][:]
 
     pnum = np.shape(plat)[0]
     pt   = np.shape(plat)[1]
 
     for particle in range(pnum):
-        # if plon[particle, 0] == plon[particle, 1]:
-        #     ax.scatter(plon[particle, 0], plat[particle, 0], c='r', s=15, marker='o')
-        # else:
-        #     ax.scatter(plon[particle, 0], plat[particle, 0], c='b', s=15, marker='o')
         ax.plot(plon[particle, :], plat[particle, :], 'w-', linewidth=0.5)
-        # ax.scatter(plon[particle, :], plat[particle, :],
-        #            c = pstate[particle, :],
-        #            cmap = cm.gray_r,
-        #            s = 10,
-        #            marker = 's')
 
     # Save
     plt.savefig(dirs['script'] + '/' + 'test_fig.png', dpi=300)

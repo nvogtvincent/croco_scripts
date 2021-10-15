@@ -14,6 +14,7 @@ import matplotlib.colors as colors
 import numpy as np
 import cmocean.cm as cmo
 import cartopy.crs as ccrs
+import random
 from netCDF4 import Dataset
 
 ##############################################################################
@@ -76,21 +77,30 @@ with Dataset(traj_file, mode='r') as nc:
 
         # Number of chunks required
         nchunk = int(np.ceil(ntraj/max_traj))
-        # nchunk = 10
+        nchunk = 1
 
-        for c in range(nchunk):
-            plon = nc.variables['lon'][c*max_traj:(c+1)*max_traj].compressed()
-            plat = nc.variables['lat'][c*max_traj:(c+1)*max_traj].compressed()
+        plon = nc.variables['lon'][:max_traj]
+        plat = nc.variables['lat'][:max_traj]
 
-            if c == 0:
-                p_hist = np.histogram2d(plon, plat, bins=[lon_bnd, lat_bnd])[0]
-            else:
-                p_hist += np.histogram2d(plon, plat, bins=[lon_bnd, lat_bnd])[0]
+        # Find identical final trajectories
+        dupe_traj = np.unique(plon[:, 600:], axis=0, return_inverse=True, return_counts=True)
+        idx = np.where(dupe_traj[2] == 2)[0][5]
+        dupe_traj_id = np.where(dupe_traj[1] == idx)[0]
+
+        dplon = plon[dupe_traj_id, :]
+        dplat = plat[dupe_traj_id, :]
+
+# Find confluence
+i = 0
+while i >= 0:
+    match = (dplon[0, i] == dplon[1, i])
+    if match:
+        conf_lon = dplon[0, i]
+        conf_lat = dplat[0, i]
+        i = -1
     else:
-        plon = nc.variables['lon'][:].compressed()
-        plat = nc.variables['lat'][:].compressed()
+        i += 1
 
-        p_hist = np.histogram2d(plon, plat, bins=[lat_bnd, lon_bnd])[0]
 
 ##############################################################################
 # Plot #######################################################################
@@ -100,41 +110,22 @@ f, a0 = plt.subplots(1, 1, figsize=(20, 10),
                      subplot_kw={'projection': ccrs.PlateCarree()})
 f.subplots_adjust(hspace=0, wspace=0, top=0.925, left=0.1)
 
-# Set up the colorbar
-axpos = a0.get_position()
-pos_x = axpos.x0+axpos.width + 0.22
-pos_y = axpos.y0
-cax_width = 0.02
-cax_height = axpos.height
+for i in range(np.shape(dplon)[0]):
+    a0.plot(dplon[i, :], dplat[i, :], linewidth=1,
+            c=('b', 'r')[i])
 
-pos_cax = f.add_axes([pos_x, pos_y, cax_width, cax_height])
+a0.scatter(conf_lon, conf_lat, s=50, c='k')
 
-# bath = a0.pcolormesh(lon, lat, h/1e3, cmap=cmo.deep)
-# lsm = a0.pcolormesh(lon, lat, mask, cmap=cmo.gray)
-# cm = a0.pcolormesh(lon_c, lat_c, coral, cmap=cmo.amp, vmin = 0, vmax = 1.5)
-
-hist = a0.pcolormesh(lon_bnd, lat_bnd, p_hist.T, cmap=cmo.thermal,
-                     norm=colors.LogNorm(vmin=1, vmax=np.max(p_hist)))
+a0.set_extent([-180, 180, -70, 70], crs=ccrs.PlateCarree())
 
 gl = a0.gridlines(crs=ccrs.PlateCarree(), draw_labels=True,
                   linewidth=1, color='black', alpha=0.5, linestyle='--')
 gl.xlabels_top = False
 gl.ylabels_right = False
 coastl = a0.coastlines()
-# gl.ylocator = mticker.FixedLocator(np.linspace(-25,0,6))
-# gl.xlocator = mticker.FixedLocator(np.linspace(30,80,11))
 
-# n_traj = np.shape(plon)[0]
-
-# for i in range(n_traj):
-#     a0.plot(plon[i, :], plat[i, :], linewidth=0.5, color='white', alpha=0.5)
-#     print(i/n_traj)
-
-cb = plt.colorbar(hist, cax=pos_cax)
-cb.set_label('Number of observations', size=12)
 a0.set_aspect('auto', adjustable=None)
 a0.margins(x=-0.01, y=-0.01)
-# a0.set_ylim(top=0)
 plt.savefig(script_dir + output_name, dpi=300)
 
 print('...complete!')
