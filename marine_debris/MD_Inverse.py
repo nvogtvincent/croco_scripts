@@ -209,37 +209,8 @@ id_psi  = Field.from_netcdf(fh['grid'],
                             interp_method='nearest',
                             allow_time_extrapolation=True)
 
-# cdist   = Field.from_netcdf(fh['grid'],
-#                             variable='cdist_rho',
-#                             dimensions={'lon': 'lon_rho',
-#                                         'lat': 'lat_rho'},
-#                             interp_method='linear',
-#                             allow_time_extrapolation=True)
-
-# cnormx  = Field.from_netcdf(fh['grid'],
-#                             variable='cnormx_rho',
-#                             dimensions={'lon': 'lon_rho',
-#                                         'lat': 'lat_rho'},
-#                             interp_method='linear',
-#                             mesh='spherical',
-#                             allow_time_extrapolation=True)
-
-# cnormy  = Field.from_netcdf(fh['grid'],
-#                             variable='cnormy_rho',
-#                             dimensions={'lon': 'lon_rho',
-#                                         'lat': 'lat_rho'},
-#                             interp_method='linear',
-#                             mesh='spherical',
-#                             allow_time_extrapolation=True)
-
-# fieldset.add_field(cdist)
 fieldset.add_field(id_psi)
-# fieldset.add_field(cnormx)
-# fieldset.add_field(cnormy)
 fieldset.add_field(lsm_rho)
-
-# fieldset.cnormx_rho.units = GeographicPolar()
-# fieldset.cnormy_rho.units = Geographic()
 
 # ADD THE PERIODIC BOUNDARY
 fieldset.add_constant('halo_west', -180.)
@@ -267,28 +238,11 @@ class debris(JITParticle):
                    initial=fieldset.id_psi,
                    to_write='once')
 
-    # Particle distance from land
-    # cd  = Variable('cd',
-    #                dtype=np.float32,
-    #                initial=0.,
-    #                to_write=False)
-
     # Time at sea (ocean time)
     ot  = Variable('ot',
                    dtype=np.int32,
                    initial=0,
                    to_write=False)
-
-    # Velocity away from coast (to prevent beaching)
-    # uc  = Variable('uc',
-    #                dtype=np.float32,
-    #                initial=0.,
-    #                to_write=False)
-
-    # vc  = Variable('vc',
-    #                dtype=np.float32,
-    #                initial=0.,
-    #                to_write=False)
 
 
 def beach(particle, fieldset, time):
@@ -298,21 +252,6 @@ def beach(particle, fieldset, time):
 
     if particle.lsm == 1.0:
         particle.delete()
-
-# def antibeach(particle, fieldset, time):
-#     #  Kernel to repel particles from the coast
-#     particle.cd = fieldset.cdist_rho[particle]
-
-#     if particle.cd < 0.5:
-
-#         particle.uc = fieldset.cnormx_rho[particle]
-#         particle.vc = fieldset.cnormy_rho[particle]
-
-#         particle.uc *= -1*(particle.cd - 0.5)**2
-#         particle.vc *= -1*(particle.cd - 0.5)**2
-
-#         particle.lon += particle.uc*particle.dt
-#         particle.lat += particle.vc*particle.dt
 
 def deleteParticle(particle, fieldset, time):
     #  Recovery kernel to delete a particle if it leaves the domain
@@ -356,7 +295,6 @@ traj = pset.ParticleFile(name=fh['traj'],
                          outputdt=param['dt_out'])
 
 kernels = (pset.Kernel(AdvectionRK4) +
-           # pset.Kernel(antibeach) +
            pset.Kernel(beach) +
            pset.Kernel(periodicBC))
 
