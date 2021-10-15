@@ -64,7 +64,7 @@ param = {# Release timing
 
 # DIRECTORIES
 dirs = {'script': os.path.dirname(os.path.realpath(__file__)),
-        'model': os.path.dirname(os.path.realpath(__file__)) + '/MODEL_DATA_NEW/',
+        'model': os.path.dirname(os.path.realpath(__file__)) + '/MODEL_DATA/',
         'grid': os.path.dirname(os.path.realpath(__file__)) + '/GRID_DATA/',
         'plastic': os.path.dirname(os.path.realpath(__file__)) + '/PLASTIC_DATA/',
         'traj': os.path.dirname(os.path.realpath(__file__)) + '/TRAJ/'}

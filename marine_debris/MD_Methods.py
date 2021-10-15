@@ -299,12 +299,11 @@ def release_loc(param, fh):
         id_out = np.append(id_out, np.ones(np.shape(gridx),
                                            dtype=np.int32)*loc_id)
 
-
-
     # Now distribute trajectories across processes
     proc_out = np.repeat(np.arange(param['nproc'],
                                    dtype=(np.int16 if param['nproc'] > 123 else np.int8)),
                          int(np.ceil(len(id_out)/param['nproc'])))
+    proc_out = proc_out[:len(id_out)]
 
 
     pos0 = {'lon': lon_out,
