@@ -28,7 +28,7 @@ param = {# Release timing
          'Ymin'              : 2019,          # First release year
          'Ymax'              : 2019,          # Last release year
          'Mmin'              : 12   ,          # First release month
-         'Mmax'              : 12  ,          # Last release month
+         'Mmax'              : 1  ,          # Last release month
          'RPM'               : 1   ,          # Releases per month
          'mode'              :'START',        # Release at END or START
 
@@ -43,14 +43,14 @@ param = {# Release timing
          'max_age'           : 0,             # Max age (years). 0 == inf.
 
          # Runtime parameters
-         'Yend'              : 2019,                   # Last year of simulation
-         'Mend'              : 11  ,                   # Last month
-         'Dend'              : 25   ,                  # Last day (00:00, start)
-         'dt_RK4'            : timedelta(minutes=-30), # RK4 time-step
+         'Yend'              : 2008,                    # Last year of simulation
+         'Mend'              : 1   ,                    # Last month
+         'Dend'              : 1   ,                    # Last day (00:00, start)
+         'dt_RK4'            : timedelta(minutes=-30),  # RK4 time-step
 
          # Output parameters
-         'dt_out'            : timedelta(hours=1),     # Output frequency
-         'fn_out'            : '1M_f8_test.nc',        # Output filename
+         'dt_out'            : timedelta(hours=120),    # Output frequency
+         'fn_out'            : '2019_SeyBwd.nc',        # Output filename
 
          # Other parameters
          'update'            : True,                   # Update grid files
@@ -59,7 +59,7 @@ param = {# Release timing
          'p_param'           : {'l'  : 50.,            # Plastic length scale
                                 'cr' : 0.15},          # Fraction entering sea
 
-         'test'              : False,                   # Activate test mode
+         'test'              : False,                  # Activate test mode
          'line_rel'          : False,}                 # Release particles in line
 
 # DIRECTORIES
@@ -122,17 +122,17 @@ if not param['test']:
 else:
     if param['line_rel']:
         particles['loc_array'] = {}
-        particles['loc_array']['lon0'] = 49.35
-        particles['loc_array']['lon1'] = 49.35
-        particles['loc_array']['lat0'] = -12.05
+        particles['loc_array']['lon0'] = 49.22
+        particles['loc_array']['lon1'] = 49.22
+        particles['loc_array']['lat0'] = -12.3
         particles['loc_array']['lat1'] = -12.2
 
         particles['loc_array']['ll'] = [np.linspace(particles['loc_array']['lon0'],
                                                     particles['loc_array']['lon1'],
-                                                    num=10),
+                                                    num=500),
                                         np.linspace(particles['loc_array']['lat0'],
                                                     particles['loc_array']['lat1'],
-                                                    num=10),]
+                                                    num=500),]
 
 
         particles['loc_array']['lon'] = particles['loc_array']['ll'][0].flatten()
@@ -140,6 +140,7 @@ else:
 
         particles['loc_array']['iso'] = np.zeros_like(particles['loc_array']['lon'])
         particles['loc_array']['id'] = np.zeros_like(particles['loc_array']['lon'])
+        particles['loc_array']['partitions'] = np.zeros_like(particles['loc_array']['lon'])
     else:
         particles['loc_array'] = mdm.release_loc(param, fh)
 
@@ -150,15 +151,6 @@ particles['pos'] = mdm.add_times(particles)
 ##############################################################################
 # SET UP FIELDSETS                                                           #
 ##############################################################################
-
-# Chunksize for parallel execution
-cs_OCEAN = {'time': ('time', 2),
-            'lat': ('latitude', 512),
-            'lon': ('longitude', 512)}
-
-cs_WAVE  = {'time': ('time', 2),
-            'lat': ('latitude', 512),
-            'lon': ('longitude', 512)}
 
 # OCEAN (CMEMS GLORYS12V1)
 filenames = fh['ocean']
@@ -176,24 +168,27 @@ fieldset_ocean = FieldSet.from_netcdf(filenames, variables, dimensions,
                                       interp_method=interp_method,
                                       chunksize=False)
 
-# WAVE (STOKES FROM WAVERYS W/ GLORYS12V1)
-filenames = fh['wave']
+if param['stokes']:
+    # WAVE (STOKES FROM WAVERYS W/ GLORYS12V1)
+    filenames = fh['wave']
 
-variables = {'U': 'VSDX',
-             'V': 'VSDY'}
+    variables = {'U': 'VSDX',
+                 'V': 'VSDY'}
 
-dimensions = {'U': {'lon': 'lon_rho', 'lat': 'lat_rho', 'time': 'time'},
-              'V': {'lon': 'lon_rho', 'lat': 'lat_rho', 'time': 'time'}}
+    dimensions = {'U': {'lon': 'lon_rho', 'lat': 'lat_rho', 'time': 'time'},
+                  'V': {'lon': 'lon_rho', 'lat': 'lat_rho', 'time': 'time'}}
 
-interp_method = {'U' : 'freeslip',
-                 'V' : 'freeslip'}
+    interp_method = {'U' : 'freeslip',
+                     'V' : 'freeslip'}
 
-fieldset_wave = FieldSet.from_netcdf(filenames, variables, dimensions,
-                                     interp_method=interp_method,
-                                     chunksize=False)
+    fieldset_wave = FieldSet.from_netcdf(filenames, variables, dimensions,
+                                         interp_method=interp_method,
+                                         chunksize=False)
 
-fieldset = FieldSet(U=fieldset_ocean.U+fieldset_wave.U,
-                    V=fieldset_ocean.V+fieldset_wave.V)
+    fieldset = FieldSet(U=fieldset_ocean.U+fieldset_wave.U,
+                        V=fieldset_ocean.V+fieldset_wave.V)
+else:
+    fieldset = fieldset_ocean
 
 # ADD THE LSM, ID, CDIST, AND CNORM FIELDS
 lsm_rho = Field.from_netcdf(fh['grid'],
@@ -229,7 +224,7 @@ if param['max_age']:
 class debris(JITParticle):
     # Land-sea mask (if particle has beached)
     lsm = Variable('lsm',
-                   dtype=np.float32,
+                   dtype=np.float64,
                    initial=0,
                    to_write=False)
 
@@ -255,15 +250,8 @@ def beach(particle, fieldset, time):
         particle.delete()
 
 def deleteParticle(particle, fieldset, time):
-    #  Recovery kernel to delete a particle if it leaves the domain
-    #  (possible in certain configurations)
+    #  Recovery kernel to delete a particle if an error occurs
     particle.delete()
-
-def shiftParticle(particle, fieldset, time):
-    #  Recovery kernel to shift a particle if it returns an interpolation error
-    #  Shift particle by 1m
-    particle.lon += 1e-5
-    particle.lat += 1e-5
 
 def oldParticle(particle, fieldset, time):
     # Remove particles older than given age
@@ -296,9 +284,13 @@ print(str(len(particles['pos']['time'])) + ' particles released!')
 traj = pset.ParticleFile(name=fh['traj'],
                          outputdt=param['dt_out'])
 
-kernels = (pset.Kernel(AdvectionRK4) +
-           pset.Kernel(beach) +
-           pset.Kernel(periodicBC))
+if param['max_age']:
+    kernels = (pset.Kernel(AdvectionRK4) +
+               pset.Kernel(oldParticle) +
+               pset.Kernel(periodicBC))
+else:
+    kernels = (pset.Kernel(AdvectionRK4) +
+               pset.Kernel(periodicBC))
 
 pset.execute(kernels,
              endtime=param['endtime'],
@@ -315,7 +307,7 @@ traj.export()
 
 if param['test']:
     # Set display region
-    (lon_min, lon_max, lat_min, lat_max) = (46.0, 56, -12, -2)
+    (lon_min, lon_max, lat_min, lat_max) = (49, 50, -12.4, -11.4)
 
     # Import grids
     with Dataset(fh['grid'], mode='r') as nc:
