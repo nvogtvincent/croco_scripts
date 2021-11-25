@@ -31,7 +31,7 @@ y_in = int(argv[1])
 param = {# Release timing
          'Ymin'              : y_in,          # First release year
          'Ymax'              : y_in,          # Last release year
-         'Mmin'              : 1   ,          # First release month
+         'Mmin'              : 12   ,          # First release month
          'Mmax'              : 12  ,          # Last release month
          'RPM'               : 1   ,          # Releases per month
          'mode'              :'START',        # Release at END or START
@@ -53,7 +53,7 @@ param = {# Release timing
          'dt_RK4'            : timedelta(minutes=-30),  # RK4 time-step
 
          # Output parameters
-         'dt_out'            : timedelta(hours=120),    # Output frequency
+         'dt_out'            : timedelta(hours=1),    # Output frequency
          'fn_out'            : str(y_in)+'_SeyBwd.nc',        # Output filename
 
          # Other parameters
@@ -63,8 +63,8 @@ param = {# Release timing
          'p_param'           : {'l'  : 50.,            # Plastic length scale
                                 'cr' : 0.15},          # Fraction entering sea
 
-         'test'              : False,                  # Activate test mode
-         'line_rel'          : False,}                 # Release particles in line
+         'test'              : True,                  # Activate test mode
+         'line_rel'          : True,}                 # Release particles in line
 
 # DIRECTORIES
 dirs = {'script': os.path.dirname(os.path.realpath(__file__)),
@@ -170,12 +170,11 @@ variables = {'U': 'uo',
 dimensions = {'U': {'lon': 'longitude', 'lat': 'latitude', 'time': 'time'},
               'V': {'lon': 'longitude', 'lat': 'latitude', 'time': 'time'}}
 
-interp_method = {'U' : 'freeslip',
-                 'V' : 'freeslip'}
+interp_method = {'U' : 'linear',
+                 'V' : 'linear'}
 
 fieldset_ocean = FieldSet.from_netcdf(filenames, variables, dimensions,
-                                      interp_method=interp_method,
-                                      chunksize=False)
+                                      interp_method=interp_method)
 
 if param['stokes']:
     # WAVE (STOKES FROM WAVERYS W/ GLORYS12V1)
@@ -187,26 +186,19 @@ if param['stokes']:
     dimensions = {'U': {'lon': 'lon_rho', 'lat': 'lat_rho', 'time': 'time'},
                   'V': {'lon': 'lon_rho', 'lat': 'lat_rho', 'time': 'time'}}
 
-    interp_method = {'U' : 'freeslip',
-                     'V' : 'freeslip'}
+    interp_method = {'U' : 'linear',
+                     'V' : 'linear'}
 
     fieldset_wave = FieldSet.from_netcdf(filenames, variables, dimensions,
-                                         interp_method=interp_method,
-                                         chunksize=False)
+                                         interp_method=interp_method)
 
     fieldset = FieldSet(U=fieldset_ocean.U+fieldset_wave.U,
                         V=fieldset_ocean.V+fieldset_wave.V)
 else:
     fieldset = fieldset_ocean
 
-# ADD THE LSM, ID, CDIST, AND CNORM FIELDS
-lsm_rho = Field.from_netcdf(fh['grid'],
-                            variable='lsm_rho',
-                            dimensions={'lon': 'lon_rho',
-                                        'lat': 'lat_rho'},
-                            interp_method='linear',
-                            allow_time_extrapolation=True)
-
+# ADD ADDITIONAL FIELDS
+# Country identifier grid (on psi grid, nearest)
 iso_psi  = Field.from_netcdf(fh['grid'],
                              variable='iso_psi',
                              dimensions={'lon': 'lon_psi',
@@ -214,16 +206,40 @@ iso_psi  = Field.from_netcdf(fh['grid'],
                              interp_method='nearest',
                              allow_time_extrapolation=True)
 
-id_psi  = Field.from_netcdf(fh['grid'],
-                            variable='id_psi',
-                            dimensions={'lon': 'lon_psi',
-                                        'lat': 'lat_psi'},
-                            interp_method='nearest',
+# Distance from nearest land point
+cdist   = Field.from_netcdf(fh['grid'],
+                            variable='cdist_rho',
+                            dimensions={'lon': 'lon_rho',
+                                        'lat': 'lat_rho'},
+                            interp_method='linear',
+                            allow_time_extrapolation=True)
+
+# Normal away from coast (x component)
+cnormx  = Field.from_netcdf(fh['grid'],
+                            variable='cnormx_rho',
+                            dimensions={'lon': 'lon_rho',
+                                        'lat': 'lat_rho'},
+                            interp_method='linear',
+                            mesh='spherical',
+                            allow_time_extrapolation=True)
+
+# Normal away from coast (y component)
+cnormy  = Field.from_netcdf(fh['grid'],
+                            variable='cnormy_rho',
+                            dimensions={'lon': 'lon_rho',
+                                        'lat': 'lat_rho'},
+                            interp_method='linear',
+                            mesh='spherical',
                             allow_time_extrapolation=True)
 
 fieldset.add_field(iso_psi)
-fieldset.add_field(id_psi)
-fieldset.add_field(lsm_rho)
+fieldset.add_field(cdist)
+fieldset.add_field(cnormx)
+fieldset.add_field(cnormy)
+
+fieldset.cnormx_rho.units = GeographicPolar()
+fieldset.cnormy_rho.units = Geographic()
+
 
 # ADD THE PERIODIC BOUNDARY
 fieldset.add_constant('halo_west', -180.)
@@ -239,23 +255,11 @@ if param['max_age']:
 ##############################################################################
 
 class debris(JITParticle):
-    # Land-sea mask (if particle has beached)
-    lsm = Variable('lsm',
-                   dtype=np.float64,
-                   initial=0,
-                   to_write=False)
-
     # Coast mask (if particle is in a coastal cell)
     cm = Variable('cm',
                   dtype=np.float64,
                   initial=0,
                   to_write=False)
-
-    # Source ID
-    sid = Variable('sid',
-                   dtype=np.int32,
-                   initial=fieldset.id_psi,
-                   to_write='once')
 
     # Time at sea (ocean time)
     ot  = Variable('ot',
@@ -269,19 +273,30 @@ class debris(JITParticle):
                   initial=0,
                   to_write=True)
 
+    # Particle distance from land
+    cd  = Variable('cd',
+                   dtype=np.float32,
+                   initial=0.,
+                   to_write=False)
+
+    # Velocity away from coast (to prevent beaching) - x component
+    uc  = Variable('uc',
+                   dtype=np.float32,
+                   initial=0.,
+                   to_write=False)
+
+    # Velocity away from coast (to prevent beaching) - y component
+    vc  = Variable('vc',
+                   dtype=np.float32,
+                   initial=0.,
+                   to_write=False)
+
 def coast(particle, fieldset, time):
     # Keep track of the amount of time spent within a coastal cell
     particle.cm = fieldset.iso_psi[particle]
 
     if particle.cm > 0:
         particle.ct -= particle.dt
-
-def beach(particle, fieldset, time):
-    #  Recovery kernel to delete a particle if it is beached
-    particle.lsm = fieldset.lsm_rho[particle]
-
-    if particle.lsm == 1.0:
-        particle.delete()
 
 def deleteParticle(particle, fieldset, time):
     #  Recovery kernel to delete a particle if an error occurs
@@ -293,6 +308,21 @@ def oldParticle(particle, fieldset, time):
 
     if particle.ot > fieldset.max_age:
         particle.delete()
+
+def antibeach(particle, fieldset, time):
+    #  Kernel to repel particles from the coast
+    particle.cd = fieldset.cdist_rho[particle]
+
+    if particle.cd < 0.5:
+
+        particle.uc = fieldset.cnormx_rho[particle]
+        particle.vc = fieldset.cnormy_rho[particle]
+
+        particle.uc *= -1*(particle.cd - 0.5)**2
+        particle.vc *= -1*(particle.cd - 0.5)**2
+
+        particle.lon += particle.uc*particle.dt
+        particle.lat += particle.vc*particle.dt
 
 def periodicBC(particle, fieldset, time):
     # Move the particle across the periodic boundary
@@ -310,9 +340,8 @@ pset = ParticleSet.from_list(fieldset=fieldset,
                              lonlatdepth_dtype=np.float64,
                              lon  = particles['pos']['lon'],
                              lat  = particles['pos']['lat'],
-                             time = particles['pos']['time'],
-                             partitions = particles['pos']['partitions']
-                             )
+                             time = particles['pos']['time'])
+
 print(str(len(particles['pos']['time'])) + ' particles released!')
 
 traj = pset.ParticleFile(name=fh['traj'],
@@ -321,11 +350,13 @@ traj = pset.ParticleFile(name=fh['traj'],
 if param['max_age']:
     kernels = (pset.Kernel(AdvectionRK4) +
                pset.Kernel(coast) +
+               pset.Kernel(antibeach) +
                pset.Kernel(oldParticle) +
                pset.Kernel(periodicBC))
 else:
     kernels = (pset.Kernel(AdvectionRK4) +
                pset.Kernel(coast) +
+               pset.Kernel(antibeach) +
                pset.Kernel(periodicBC))
 
 pset.execute(kernels,
