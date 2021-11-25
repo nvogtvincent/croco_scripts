@@ -18,39 +18,43 @@ from netCDF4 import Dataset, num2date
 from datetime import timedelta, datetime
 from glob import glob
 from mpi4py import MPI
+from sys import argv
 
 ##############################################################################
 # DIRECTORIES & PARAMETERS                                                   #
 ##############################################################################
 
+# START YEAR
+y_in = int(argv[1])
+
 # PARAMETERS
 param = {# Release timing
-         'Ymin'              : 2019,          # First release year
-         'Ymax'              : 2019,          # Last release year
-         'Mmin'              : 12   ,          # First release month
-         'Mmax'              : 1  ,          # Last release month
+         'Ymin'              : y_in,          # First release year
+         'Ymax'              : y_in,          # Last release year
+         'Mmin'              : 1   ,          # First release month
+         'Mmax'              : 12  ,          # Last release month
          'RPM'               : 1   ,          # Releases per month
          'mode'              :'START',        # Release at END or START
 
          # Release location
          'id'                : [690],         # ISO IDs of release countries
-         'pn'                :  2500,           # Particles to release per cell
+         'pn'                : 4096,         # Particles to release per cell
 
          # Simulation parameters
          'stokes'            : True,          # Toggle to use Stokes drift
          'windage'           : False,         # Toggle to use windage
          'fw'                : 0.0,           # Windage fraction
-         'max_age'           : 0,             # Max age (years). 0 == inf.
+         'max_age'           : 10,             # Max age (years). 0 == inf.
 
          # Runtime parameters
-         'Yend'              : 2008,                    # Last year of simulation
+         'Yend'              : y_in-10,                    # Last year of simulation
          'Mend'              : 1   ,                    # Last month
          'Dend'              : 1   ,                    # Last day (00:00, start)
          'dt_RK4'            : timedelta(minutes=-30),  # RK4 time-step
 
          # Output parameters
          'dt_out'            : timedelta(hours=120),    # Output frequency
-         'fn_out'            : '2019_SeyBwd.nc',        # Output filename
+         'fn_out'            : str(y_in)+'_SeyBwd.nc',        # Output filename
 
          # Other parameters
          'update'            : True,                   # Update grid files
@@ -75,6 +79,11 @@ fh = {'ocean':   sorted(glob(dirs['model'] + 'OCEAN_*.nc')),
       'grid':    dirs['grid'] + 'griddata.nc',
       'traj':    dirs['traj'] + param['fn_out'],
       'sid':     dirs['traj'] + 'sid.nc'}
+
+# MODIFICATION TO PREVENT CRASHING IF END_YR=1993
+if param['Yend'] == 1993:
+    if param['Dend'] == 1:
+        param['Dend'] = 2
 
 ##############################################################################
 # SET UP PARTICLE RELEASES                                                   #
@@ -125,14 +134,14 @@ else:
         particles['loc_array']['lon0'] = 49.22
         particles['loc_array']['lon1'] = 49.22
         particles['loc_array']['lat0'] = -12.3
-        particles['loc_array']['lat1'] = -12.2
+        particles['loc_array']['lat1'] = -11.8
 
         particles['loc_array']['ll'] = [np.linspace(particles['loc_array']['lon0'],
                                                     particles['loc_array']['lon1'],
-                                                    num=500),
+                                                    num=10),
                                         np.linspace(particles['loc_array']['lat0'],
                                                     particles['loc_array']['lat1'],
-                                                    num=500),]
+                                                    num=10),]
 
 
         particles['loc_array']['lon'] = particles['loc_array']['ll'][0].flatten()
@@ -198,6 +207,13 @@ lsm_rho = Field.from_netcdf(fh['grid'],
                             interp_method='linear',
                             allow_time_extrapolation=True)
 
+iso_psi  = Field.from_netcdf(fh['grid'],
+                             variable='iso_psi',
+                             dimensions={'lon': 'lon_psi',
+                                         'lat': 'lat_psi'},
+                             interp_method='nearest',
+                             allow_time_extrapolation=True)
+
 id_psi  = Field.from_netcdf(fh['grid'],
                             variable='id_psi',
                             dimensions={'lon': 'lon_psi',
@@ -205,6 +221,7 @@ id_psi  = Field.from_netcdf(fh['grid'],
                             interp_method='nearest',
                             allow_time_extrapolation=True)
 
+fieldset.add_field(iso_psi)
 fieldset.add_field(id_psi)
 fieldset.add_field(lsm_rho)
 
@@ -228,6 +245,12 @@ class debris(JITParticle):
                    initial=0,
                    to_write=False)
 
+    # Coast mask (if particle is in a coastal cell)
+    cm = Variable('cm',
+                  dtype=np.float64,
+                  initial=0,
+                  to_write=False)
+
     # Source ID
     sid = Variable('sid',
                    dtype=np.int32,
@@ -240,11 +263,22 @@ class debris(JITParticle):
                    initial=0,
                    to_write=False)
 
+    # Time at coast (coast time)
+    ct = Variable('ct',
+                  dtype=np.int32,
+                  initial=0,
+                  to_write=True)
+
+def coast(particle, fieldset, time):
+    # Keep track of the amount of time spent within a coastal cell
+    particle.cm = fieldset.iso_psi[particle]
+
+    if particle.cm > 0:
+        particle.ct -= particle.dt
 
 def beach(particle, fieldset, time):
     #  Recovery kernel to delete a particle if it is beached
     particle.lsm = fieldset.lsm_rho[particle]
-    # particle.lsm = ParcelsRandom.random()
 
     if particle.lsm == 1.0:
         particle.delete()
@@ -286,10 +320,12 @@ traj = pset.ParticleFile(name=fh['traj'],
 
 if param['max_age']:
     kernels = (pset.Kernel(AdvectionRK4) +
+               pset.Kernel(coast) +
                pset.Kernel(oldParticle) +
                pset.Kernel(periodicBC))
 else:
     kernels = (pset.Kernel(AdvectionRK4) +
+               pset.Kernel(coast) +
                pset.Kernel(periodicBC))
 
 pset.execute(kernels,

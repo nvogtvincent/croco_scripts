@@ -433,12 +433,10 @@ def gridgen(fh, dirs, param, **kwargs):
                                    [-5.758, 53.307], # Poivre
                                    [-7.021, 52.737], # Alphonse
                                    [-9.225, 51.050], # Providence
-                                   [-9.275, 51.050],
-                                   [-9.325, 51.050],
-                                   [-9.375, 51.050],
-                                   [-9.425, 51.050],
-                                   [-9.475, 51.050],
-                                   [-9.475, 51.050]
+                                   [-9.525, 50.975], # Providence
+                                   [-4.485, 55.220], # Silhouette
+                                   [-4.585, 55.940], # Fregate
+                                   [-7.130, 56.270], # Coetivy
                                    ])
 
             island_loc = np.histogram2d(island_loc[:, 0],
