@@ -27,34 +27,46 @@ from sys import argv
 # START YEAR
 y_in = int(argv[1])
 
+# # PARTITIONS
+try:
+    tot_part = int(argv[2])
+    part = int(argv[3])
+except:
+    tot_part = 1
+    part = 0
+
 # PARAMETERS
 param = {# Release timing
          'Ymin'              : y_in,          # First release year
          'Ymax'              : y_in,          # Last release year
-         'Mmin'              : 12   ,          # First release month
+         'Mmin'              : 1   ,          # First release month
          'Mmax'              : 12  ,          # Last release month
          'RPM'               : 1   ,          # Releases per month
          'mode'              :'START',        # Release at END or START
 
          # Release location
          'id'                : [690],         # ISO IDs of release countries
-         'pn'                : 4096,         # Particles to release per cell
+         'pn'                : 4096,          # Particles to release per cell
 
          # Simulation parameters
          'stokes'            : True,          # Toggle to use Stokes drift
          'windage'           : False,         # Toggle to use windage
          'fw'                : 0.0,           # Windage fraction
-         'max_age'           : 10,             # Max age (years). 0 == inf.
+         'max_age'           : 10,            # Max age (years). 0 == inf.
 
          # Runtime parameters
-         'Yend'              : y_in-10,                    # Last year of simulation
+         'Yend'              : y_in-10,                 # Last year of simulation
          'Mend'              : 1   ,                    # Last month
          'Dend'              : 1   ,                    # Last day (00:00, start)
          'dt_RK4'            : timedelta(minutes=-30),  # RK4 time-step
 
          # Output parameters
-         'dt_out'            : timedelta(hours=1),    # Output frequency
-         'fn_out'            : str(y_in)+'_SeyBwd.nc',        # Output filename
+         'dt_out'            : timedelta(hours=120),    # Output frequency
+         'fn_out'            : str(y_in)+'_SeyBwd.nc',  # Output filename
+
+         # Partitioning
+         'total_partitions'  : tot_part,
+         'partition'         : part,
 
          # Other parameters
          'update'            : True,                   # Update grid files
@@ -63,8 +75,8 @@ param = {# Release timing
          'p_param'           : {'l'  : 50.,            # Plastic length scale
                                 'cr' : 0.15},          # Fraction entering sea
 
-         'test'              : True,                  # Activate test mode
-         'line_rel'          : True,}                 # Release particles in line
+         'test'              : False,                  # Activate test mode
+         'line_rel'          : False,}                 # Release particles in line
 
 # DIRECTORIES
 dirs = {'script': os.path.dirname(os.path.realpath(__file__)),
@@ -122,9 +134,6 @@ grid = mdm.gridgen(fh, dirs, param, plastic=True, add_seychelles=True)
 # Calculate the times for particle releases
 particles = {'time_array' : mdm.release_time(param, mode=param['mode'])}
 
-# Calculate number of processes
-param['nproc'] = MPI.COMM_WORLD.Get_size()
-
 # Calculate the locations, ids, procs for particle releases
 if not param['test']:
     particles['loc_array'] = mdm.release_loc(param, fh)
@@ -149,13 +158,12 @@ else:
 
         particles['loc_array']['iso'] = np.zeros_like(particles['loc_array']['lon'])
         particles['loc_array']['id'] = np.zeros_like(particles['loc_array']['lon'])
-        particles['loc_array']['partitions'] = np.zeros_like(particles['loc_array']['lon'])
     else:
         particles['loc_array'] = mdm.release_loc(param, fh)
 
 
 # Calculate a final array of release positions, IDs, and times
-particles['pos'] = mdm.add_times(particles)
+particles['pos'] = mdm.add_times(particles, param)
 
 ##############################################################################
 # SET UP FIELDSETS                                                           #
@@ -371,7 +379,7 @@ traj.export()
 ##############################################################################
 # PLOT TEST CASE                                                             #
 ##############################################################################
-
+param['test'] = 1
 if param['test']:
     # Set display region
     (lon_min, lon_max, lat_min, lat_max) = (49, 50, -12.4, -11.4)

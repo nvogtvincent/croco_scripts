@@ -239,17 +239,13 @@ def release_loc(param, fh):
     # - id_psi mask (cell ids)
     # - coast_id mask (country codes)
 
-
     with Dataset(fh['grid'], mode='r') as nc:
         lon_psi = np.array(nc.variables['lon_psi'][:])
         lat_psi = np.array(nc.variables['lat_psi'][:])
 
         lon_rho = np.array(nc.variables['lon_rho'][:])
-        lat_rho = np.array(nc.variables['lat_rho'][:])
 
         id_psi    = np.array(nc.variables['id_psi'][:])
-        lsm_rho   = np.array(nc.variables['lsm_rho'][:])
-
         iso_psi   = np.array(nc.variables['iso_psi'][:])
 
     # Now find the cells matching the provided ISO codes
@@ -300,21 +296,20 @@ def release_loc(param, fh):
                                            dtype=np.int32)*loc_id)
 
     # Now distribute trajectories across processes
-    proc_out = np.repeat(np.arange(param['nproc'],
-                                   dtype=(np.int16 if param['nproc'] > 123 else np.int8)),
-                         int(np.ceil(len(id_out)/param['nproc'])))
-    proc_out = proc_out[:len(id_out)]
+    # proc_out = np.repeat(np.arange(param['nproc'],
+    #                                dtype=(np.int16 if param['nproc'] > 123 else np.int8)),
+    #                      int(np.ceil(len(id_out)/param['nproc'])))
+    # proc_out = proc_out[:len(id_out)]
 
 
     pos0 = {'lon': lon_out,
             'lat': lat_out,
             'iso': iso_out,
-            'id': id_out,
-            'partitions' : proc_out}
+            'id': id_out}
 
     return pos0
 
-def add_times(particles):
+def add_times(particles, param):
     # This script takes release locations at a particular time point and
     # duplicates it across multiple times
 
@@ -328,8 +323,19 @@ def add_times(particles):
     data['lat']  = np.tile(data['lat'], ntimes)
     data['iso']  = np.tile(data['iso'], ntimes)
     data['id']   = np.tile(data['id'], ntimes)
-    data['partitions']   = np.tile(data['partitions'], ntimes)
     data['time'] = np.repeat(times, npart)
+
+    # Also now calculation partitioning of particles
+    if param['total_partitions'] > 1:
+        pn_per_part = int(np.ceil(npart*ntimes/param['total_partitions']))
+        i0 = pn_per_part*param['partition']
+        i1 = pn_per_part*(param['partition']+1)
+
+        data['lon'] = data['lon'][i0:i1]
+        data['lat'] = data['lat'][i0:i1]
+        data['iso'] = data['iso'][i0:i1]
+        data['id'] = data['id'][i0:i1]
+        data['time'] = data['time'][i0:i1]
 
     return data
 
