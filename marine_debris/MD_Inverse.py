@@ -62,7 +62,7 @@ param = {# Release timing
 
          # Output parameters
          'dt_out'            : timedelta(hours=120),    # Output frequency
-         'fn_out'            : str(y_in)+'_SeyBwd.nc',  # Output filename
+         'fn_out'            : str(y_in) + '_' + str(part) + '_SeyBwd.nc',  # Output filename
 
          # Partitioning
          'total_partitions'  : tot_part,
@@ -379,7 +379,7 @@ traj.export()
 ##############################################################################
 # PLOT TEST CASE                                                             #
 ##############################################################################
-param['test'] = 1
+
 if param['test']:
     # Set display region
     (lon_min, lon_max, lat_min, lat_max) = (49, 50, -12.4, -11.4)
