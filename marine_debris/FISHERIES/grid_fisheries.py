@@ -11,12 +11,15 @@ GFW fishing effort data
 import os
 import numpy as np
 import matplotlib.pyplot as plt
-import cmocean.cm as cm
+import matplotlib.colors as colors
+import cmasher as cmr
 import pandas as pd
 from netCDF4 import Dataset, num2date
 from datetime import timedelta, datetime
 from glob import glob
 import time
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
 
 ###############################################################################
 # Parameters ##################################################################
@@ -25,7 +28,7 @@ import time
 # PARAMETERS
 param = {'grid_res': 2.0,                          # Grid resolution in degrees
          'lon_range': [20, 100],                   # Longitude range for output
-         'lat_range': [-60, 30],                   # Latitude range for output
+         'lat_range': [-50, 30],                   # Latitude range for output
 
          'dict_name': 'mmsi_dict.pkl',
          'out_name': 'fisheries_waste_flux.png'}
@@ -46,14 +49,25 @@ for path, subdirs, files in os.walk(dirs['data_obs']):
     for name in files:
         fh['obs'].append(os.path.join(path, name))
 
-# GEAR INTENSITY & DISSIPATION RATE
-gear_intensity = {0: {'LOA': 153.0, # Purse seines
-                      'GT': 30.0,
-                      'kW': 16.5},
-                  1: {'LOA': 12.8, # Trawlers
-                      'GT': 8.3,
-                      'kW': 0.45},
-                  2: {'LOA': 33.8}} # Longlines
+gear_intensity = {'seine': 1,
+                  'trawl': 1,
+                  'dredge': 1,
+                  'set_longline': 1,
+                  'set_gillnet': 1,
+                  'pot': 1,
+                  'fixed': 1,
+                  'drifting_longline': 1,
+                  'jigg': 1,
+                  'pole': 1,
+                  'troll': 1}
+
+# 0: {'LOA': 153.0, # Purse seines
+#     'GT': 30.0,
+#     'kW': 16.5},
+# 1: {'LOA': 12.8, # Trawlers
+#     'GT': 8.3,
+#     'kW': 0.45},
+# 2: {'LOA': 33.8}} # Longlines
 
 ###############################################################################
 # Functions ###################################################################
@@ -63,24 +77,33 @@ gear_intensity = {0: {'LOA': 153.0, # Purse seines
 # The basic assumptions here are:
 # (1) Within a vessel class, the mass of equipment carried is proportional to
 #     some dimension of that vessel (i.e. gear_intensity * gear_dimension)
-# (2) We are NOT comparing different vessel classes, so the gear_intensity must
-#     only be constant within a vessel class
-# (3) Within a vessel class, ships lose a constant proportion of their equipment
-#     mass per year, so the loss per fishing hour is the mass carried divided
-#     by the hours fished that year
-# (4) Where estimates of the actual gear intensity based on multiple gear
-#     dimensions exist, we can calculate gear equipment mass from different
-#     gear dimensions (if data is missing)
-# (5) Where estimates of the gear intensity for multiple/any gear dimensions
-#     does not exist, gear equipment mass can only be calculated from one
-#     particular gear dimension.
-# (6) Where that particular gear dimension does not exist, we disregard the
-#     vessel (class <- 'none')
-# (7) We group vessels into the top-level classification by GFW:
+# (2) Intensity is constant within a vessel class
+# (3) We group vessels into the top-level classification by GFW:
 #     https://globalfishingwatch.org/datasets-and-code-vessel-identity/
-# (8) We assume that the gear carried by trawlers and dredgers is similar
-#     enough to use the same gear intensity
 
+# ASSUMPTION CLASS A ('constant loss per year')
+# Assume that all ships lose the same proportion of mass per year, i.e. loss per
+# hour = mass of equipment on ship * proportion lost per year / hours per year
+
+# ASSUMPION CLASS B ('constant loss per hour')
+# Assume that mass loss is proportional to fishing time, i.e. loss per hour =
+# mass of equipment on ship * proportion lost per hour
+
+# In both cases, we just ignore this mass loss constant as it can be built into
+# the gear intensity if we have sensible values.
+
+# Calculation:
+# Input: intensity (kg/yr/m but normalised to 1), fishing hours in year (HY)
+# Output: mass loss to ocean (kg/hr)
+
+# Assumption class A
+# Mass loss per year (kg/yr) = intensity (kg/yr/m) * LOA (m)
+# Mass loss per hour (kg/hr) = mass loss per year (kg/yr) / hours per year (hr/yr)
+# i.e. Mass loss per hour is propto intensity * LOA / hours per year
+
+# Assumption class B
+# Mass loss per hour (kg/hr) = intensity (kg/yr/m) * LOA (m) * constant (yr/hr)
+# i.e. Mass loss per hour is propto intensity * LOA
 
 def dictgen(file_in, file_out, gear_intensity):
     # Load file
@@ -115,97 +138,55 @@ def dictgen(file_in, file_out, gear_intensity):
                                 'fishing_hours_2020': '2020',})
 
 
-    def calculate_lost_gear_mass_per_hr(row, gear_intensity):
+    def calculate_lost_gear_mass_per_hr(row):
         # Useful null list
-        null = [0., 0., 0., 0., 0., 0., 0., 0., 0., 'none']
-
-        # Firstly establish whether vessel is applicable (return 0 if not)
-        # if pd.isnull(row['time']) or row['time'] == 0:
-        #     return null # lpy = mass loss per year
+        null = [[0, 0], [0, 0], [0, 0], [0, 0], [0, 0], [0, 0], [0, 0], [0, 0], [0, 0], 'none']
 
         # Establish the vessel type, then estimate the gear carried
         vessel_class = row['class']
 
         # Function to convert mass loss per year to array of mass loss per hour
-        def lpy2lph(lpy, row, vessel_type):
-            # Quick lambda that calculates loss per hour from loss per year and
-            # hours per year, and adds vessel type
-            conv = lambda lpy, hpy : 0. if (pd.isnull(hpy) + (hpy == 0)) else lpy/hpy
+        def mass_loss_rate(mass, row, vessel_type):
+            # Quick lambda that calculates loss per hour under [assumption A, assumption B]
+            conv = lambda mass, hpy : [0, 0] if (pd.isnull(hpy) + (hpy == 0)) else [mass/hpy, mass]
 
-            return [conv(lpy, row['2012']),
-                    conv(lpy, row['2013']),
-                    conv(lpy, row['2014']),
-                    conv(lpy, row['2015']),
-                    conv(lpy, row['2016']),
-                    conv(lpy, row['2017']),
-                    conv(lpy, row['2018']),
-                    conv(lpy, row['2019']),
-                    conv(lpy, row['2020']),
+            return [conv(mass, row['2012']),
+                    conv(mass, row['2013']),
+                    conv(mass, row['2014']),
+                    conv(mass, row['2015']),
+                    conv(mass, row['2016']),
+                    conv(mass, row['2017']),
+                    conv(mass, row['2018']),
+                    conv(mass, row['2019']),
+                    conv(mass, row['2020']),
                     vessel_type]
 
-        if "seine" in vessel_class:
-            if not pd.isnull(row['LOA']):
-                lpy = row['LOA']*gear_intensity[0]['LOA']
-            # elif not pd.isnull(row['GT']):
-            #     lpy = row['GT']*gear_intensity[0]['GT']
-            # elif not pd.isnull(row['kW']):
-            #     lpy = row['kW']*gear_intensity[0]['kW']
-            else:
-                return null
+        rename_dict = {'seine': 'seiners',
+                       'trawl': 'trawlers_and_dredgers',
+                       'dredge': 'trawlers_and_dredgers',
+                       'set_longline': 'fixed_gear',
+                       'set_gillnet': 'fixed_gear',
+                       'pot': 'fixed_gear',
+                       'fixed': 'fixed_gear',
+                       'drifting_longline': 'drifting_longlines',
+                       'jigg': 'squid_jigger',
+                       'pole': 'pole_and_line_and_trollers',
+                       'troll': 'pole_and_line_and_trollers'}
 
-            return lpy2lph(lpy, row, 'seiners')
+        for category in rename_dict.keys():
+            if category in vessel_class:
+                if not pd.isnull(row['LOA']):
+                    return mass_loss_rate(row['LOA']*gear_intensity[category],
+                                          row, rename_dict[category])
+                else:
+                    return null
 
-        elif "trawl" in vessel_class or "dredge" in vessel_class:
-            if not pd.isnull(row['LOA']):
-                lpy = row['LOA']*gear_intensity[1]['LOA']
-            # elif not pd.isnull(row['GT']):
-            #     lpy = row['GT']*gear_intensity[1]['GT']
-            # elif not pd.isnull(row['kW']):
-            #     lpy = row['kW']*gear_intensity[1]['kW']
-            else:
-                return null
-
-            return lpy2lph(lpy, row, 'trawlers_and_dredgers')
-
-        elif "set_longline" in vessel_class or "set_gillnet" in vessel_class or "pot" in vessel_class or "fixed" in vessel_class:
-            if not pd.isnull(row['LOA']):
-                lpy = row['LOA']*1
-            else:
-                return null
-
-            return lpy2lph(lpy, row, 'fixed_gear')
-
-        elif "drifting_longline" in vessel_class:
-            if not pd.isnull(row['LOA']):
-                lpy = row['LOA']*1
-            else:
-                return null
-
-            return lpy2lph(lpy, row, 'drifting_longlines')
-
-        elif "jigg" in vessel_class:
-            if not pd.isnull(row['LOA']):
-                lpy = row['LOA']*1
-            else:
-                return null
-
-            return lpy2lph(lpy, row, 'squid_jigger')
-
-        elif "pole" in vessel_class or "troll" in vessel_class:
-            if not pd.isnull(row['LOA']):
-                lpy = row['LOA']*1
-            else:
-                return null
-
-            return lpy2lph(lpy, row, 'pole_and_line_and_trollers')
-
+        # Anything reaching this point is unclassified ('fishing')
+        if not pd.isnull(row['LOA']):
+            return mass_loss_rate(row['LOA'], row, 'fishing')
         else:
-            if not pd.isnull(row['LOA']):
-                lpy = row['LOA']*1
-            else:
-                return null
+            return null
 
-            return lpy2lph(lpy, row, 'fishing')
 
     # Calculate mass of gear carried by vessel
     data[['2012',
@@ -217,7 +198,7 @@ def dictgen(file_in, file_out, gear_intensity):
           '2018',
           '2019',
           '2020',
-          'vessel_class']] = data.apply(lambda row: calculate_lost_gear_mass_per_hr(row, gear_intensity), axis=1, result_type='expand')
+          'vessel_class']] = data.apply(lambda row: calculate_lost_gear_mass_per_hr(row), axis=1, result_type='expand')
 
     data = data[['mmsi', '2012', '2013', '2014', '2015', '2016', '2017', '2018', '2019', '2020', 'vessel_class']]
 
@@ -240,7 +221,6 @@ def dictgen(file_in, file_out, gear_intensity):
 # (1) Establish if datapoint is within domain, and if so, where
 # (2) Find MMSI in dictionary and find mass moment per hour and vessel class
 # (3) Grid datapoint
-
 
 def grid_effort(file, grid, mmsi_lookup, lon_bnd, lat_bnd):
     # Get year
@@ -281,8 +261,9 @@ def grid_effort(file, grid, mmsi_lookup, lon_bnd, lat_bnd):
         mmsi_entry = mmsi_lookup[mmsi_lookup['mmsi'] == mmsi]
 
         # Write to data
-        data.loc[i, 'mmsi'] = mmsi_entry['vessel_class'].values[0]
-        data.loc[i, 'fishing_hours'] = mmsi_entry[year].values[0]*hrs
+        data.loc[i, 'vessel_class'] = mmsi_entry['vessel_class'].values[0]
+        data.loc[i, ['mass_rate_A', 'mass_rate_B']] = [mmsi_entry[year].values[0][0]*hrs,
+                                                       mmsi_entry[year].values[0][1]*hrs]
 
     # Now grid
     for i, vtype in enumerate(['seiners', 'trawlers_and_dredgers', 'fixed_gear',
@@ -290,14 +271,27 @@ def grid_effort(file, grid, mmsi_lookup, lon_bnd, lat_bnd):
                                'pole_and_line_and_trollers', 'fishing', 'all']):
 
         if vtype == 'all':
-            print()
+            grid[i, :, :] += np.histogram2d(data['cell_ll_lon'],
+                                            data['cell_ll_lat'],
+                                            bins=[lon_bnd, lat_bnd],
+                                            weights=data['mass_rate_A'])[0].T
+
+            grid[i+8, :, :] += np.histogram2d(data['cell_ll_lon'],
+                                            data['cell_ll_lat'],
+                                            bins=[lon_bnd, lat_bnd],
+                                            weights=data['mass_rate_B'])[0].T
         else:
-            subdata = data[data['mmsi'] == vtype]
-            # if len(subdata):
+            subdata = data[data['vessel_class'] == vtype]
             grid[i, :, :] += np.histogram2d(subdata['cell_ll_lon'],
                                             subdata['cell_ll_lat'],
                                             bins=[lon_bnd, lat_bnd],
-                                            weights=subdata['fishing_hours'])[0].T
+                                            weights=subdata['mass_rate_A'])[0].T
+
+            subdata = data[data['vessel_class'] == vtype]
+            grid[i+8, :, :] += np.histogram2d(subdata['cell_ll_lon'],
+                                            subdata['cell_ll_lat'],
+                                            bins=[lon_bnd, lat_bnd],
+                                            weights=subdata['mass_rate_B'])[0].T
 
     return grid
 
@@ -322,7 +316,7 @@ if __name__ == '__main__':
     lon = 0.5*(lon_bnd[1:] + lon_bnd[:-1])
     lat = 0.5*(lat_bnd[1:] + lat_bnd[:-1])
 
-    grid = np.zeros((8, len(lat), len(lon)), dtype=np.float64)
+    grid = np.zeros((16, len(lat), len(lon)), dtype=np.float64)
 
     # Generate MMSI dict
     try:
@@ -336,4 +330,69 @@ if __name__ == '__main__':
         print('{:.2f}'.format(100*k/len(fh['obs'])) + '%')
 
 
-    print('Finished!')
+    # Plot output
+    f0, ax = plt.subplots(2, 4, figsize=(18, 10),
+                          subplot_kw={'projection': ccrs.PlateCarree()})
+    f0.subplots_adjust(hspace=0.05, wspace=0.05, top=0.925, left=0.1)
+
+    land_10m = cfeature.NaturalEarthFeature('physical', 'land', '10m',
+                                            edgecolor='face',
+                                            facecolor='black')
+
+    for i in range(8):
+        grid_data = grid[i, :, :]
+        grid_data[np.isnan(grid_data)] = 0  # But why are NaNs appearing in the first place?
+        grid_data_nonzero = np.copy(grid_data)
+        grid_data_nonzero[grid_data == 0] = np.nan
+        p05 = np.nanpercentile(grid_data_nonzero, 5)
+        p95 = np.nanpercentile(grid_data_nonzero, 95)
+        ax.flatten()[i].pcolormesh(lon_bnd, lat_bnd, grid_data, cmap=cmr.jungle_r,
+                          norm=colors.LogNorm(vmin=p05, vmax=p95))
+        ax.flatten()[i].add_feature(land_10m)
+        ax.flatten()[i].text(10, 10, 'test', c='w')
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# a0.set_ylim([-70, 70])
+
+# axpos = a0.get_position()
+# pos_x = axpos.x0+axpos.width + 0.41
+# pos_y = axpos.y0
+# cax_width = 0.015
+# cax_height = axpos.height
+
+# pos_cax = f0.add_axes([pos_x, pos_y, cax_width, cax_height])
+
+# # Set up the colormap (from https://stackoverflow.com/questions/14777066/matplotlib-discrete-colorbar)
+# cmap = cmr.ocean
+# dens = a0.pcolormesh(lon_bnd, lat_bnd, annual_mean, cmap=cmap,
+#                      norm=colors.LogNorm(vmin=1e-5, vmax=1e0))
+
+# # Add cartographic features
+# gl = a0.gridlines(crs=ccrs.PlateCarree(), draw_labels=True,
+#                   linewidth=0.5, color='black', linestyle='-', zorder=11)
+# gl.xlabels_top = False
+# gl.ylabels_right = False
+
+# land_10m = cfeature.NaturalEarthFeature('physical', 'land', '10m',
+#                                         edgecolor='face',
+#                                         facecolor='black')
+# a0.add_feature(land_10m)
+
+# cb = plt.colorbar(dens, cax=pos_cax)
+# cb.set_label('Mean time spent in cell (days)', size=12)
+# a0.set_aspect('auto', adjustable=None)
+# a0.margins(x=-0.01, y=-0.01)
+# plt.savefig(fh['fig'][1], dpi=300)
