@@ -26,7 +26,7 @@ import cartopy.feature as cfeature
 ###############################################################################
 
 # PARAMETERS
-param = {'grid_res': 2.0,                          # Grid resolution in degrees
+param = {'grid_res': 1.0,                          # Grid resolution in degrees
          'lon_range': [20, 100],                   # Longitude range for output
          'lat_range': [-50, 30],                   # Latitude range for output
 
@@ -331,68 +331,40 @@ if __name__ == '__main__':
 
 
     # Plot output
-    f0, ax = plt.subplots(2, 4, figsize=(18, 10),
+    f0, ax = plt.subplots(2, 4, figsize=(20, 10),
                           subplot_kw={'projection': ccrs.PlateCarree()})
-    f0.subplots_adjust(hspace=0.05, wspace=0.05, top=0.925, left=0.1)
+    f0.subplots_adjust(hspace=0.01, wspace=0.01, top=0.925, left=0.05)
+
+    axpos = ax[-1, -1].get_position()
+    pos_x = axpos.x0+axpos.width + 0.01
+    pos_y = axpos.y0
+    cax_width = 0.015
+    cax_height = 2.01*axpos.height
+
+    pos_cax = f0.add_axes([pos_x, pos_y, cax_width, cax_height])
 
     land_10m = cfeature.NaturalEarthFeature('physical', 'land', '10m',
                                             edgecolor='face',
                                             facecolor='black')
 
+    text_labels = ['Seiners', 'Trawlers and dredgers', 'Fixed gear',
+                   'Drifting longlines', 'Squid jiggers',
+                   'Pole and line, and trollers', 'Unclassified', 'All']
+
     for i in range(8):
+        axis = ax.flatten()[i]
         grid_data = grid[i, :, :]
         grid_data[np.isnan(grid_data)] = 0  # But why are NaNs appearing in the first place?
         grid_data_nonzero = np.copy(grid_data)
         grid_data_nonzero[grid_data == 0] = np.nan
         p05 = np.nanpercentile(grid_data_nonzero, 5)
         p95 = np.nanpercentile(grid_data_nonzero, 95)
-        ax.flatten()[i].pcolormesh(lon_bnd, lat_bnd, grid_data, cmap=cmr.jungle_r,
-                          norm=colors.LogNorm(vmin=p05, vmax=p95))
-        ax.flatten()[i].add_feature(land_10m)
-        ax.flatten()[i].text(10, 10, 'test', c='w')
+        heatmap = axis.pcolormesh(lon_bnd, lat_bnd, grid_data/p95, cmap=cmr.chroma_r,
+                                             norm=colors.LogNorm(vmin=1e-3, vmax=1))
+        axis.add_feature(land_10m)
+        axis.text(98, 26, text_labels[i], c='w', horizontalalignment='right')
 
+        axis.axis('off')
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-# a0.set_ylim([-70, 70])
-
-# axpos = a0.get_position()
-# pos_x = axpos.x0+axpos.width + 0.41
-# pos_y = axpos.y0
-# cax_width = 0.015
-# cax_height = axpos.height
-
-# pos_cax = f0.add_axes([pos_x, pos_y, cax_width, cax_height])
-
-# # Set up the colormap (from https://stackoverflow.com/questions/14777066/matplotlib-discrete-colorbar)
-# cmap = cmr.ocean
-# dens = a0.pcolormesh(lon_bnd, lat_bnd, annual_mean, cmap=cmap,
-#                      norm=colors.LogNorm(vmin=1e-5, vmax=1e0))
-
-# # Add cartographic features
-# gl = a0.gridlines(crs=ccrs.PlateCarree(), draw_labels=True,
-#                   linewidth=0.5, color='black', linestyle='-', zorder=11)
-# gl.xlabels_top = False
-# gl.ylabels_right = False
-
-# land_10m = cfeature.NaturalEarthFeature('physical', 'land', '10m',
-#                                         edgecolor='face',
-#                                         facecolor='black')
-# a0.add_feature(land_10m)
-
-# cb = plt.colorbar(dens, cax=pos_cax)
-# cb.set_label('Mean time spent in cell (days)', size=12)
-# a0.set_aspect('auto', adjustable=None)
-# a0.margins(x=-0.01, y=-0.01)
-# plt.savefig(fh['fig'][1], dpi=300)
+    cb = plt.colorbar(heatmap, cax=pos_cax)
+    cb.outline.set_visible(False)
