@@ -374,19 +374,20 @@ def gridgen(fh, dirs, param, **kwargs):
             if plastic:
                 print('Grid file found, loading data (with plastics)')
                 grid = {'coast_psi': np.array(nc.variables['coast_psi'][:]),
-                        'lsm_psi': np.array(nc.variables['lsm_psi'][:]),
-                        'lsm_rho': np.array(nc.variables['lsm_rho'][:]),
-                        'lon_rho': np.array(nc.variables['lon_rho'][:]),
-                        'lon_psi': np.array(nc.variables['lon_psi'][:]),
-                        'lat_rho': np.array(nc.variables['lat_rho'][:]),
-                        'lat_psi': np.array(nc.variables['lat_psi'][:]),
-                        'cdist_rho': np.array(nc.variables['cdist_rho'][:]),
-                        'cnormx_rho': np.array(nc.variables['cnormx_rho'][:]),
-                        'cnormy_rho': np.array(nc.variables['cnormy_rho'][:]),
-                        'id_psi': np.array(nc.variables['id_psi']),
-                        'iso_psi': np.array(nc.variables['iso_psi']),
-                        'cplastic_psi': np.array(nc.variables['cplastic_psi']),
-                        'rplastic_psi': np.array(nc.variables['rplastic_psi'])}
+                            'lsm_psi': np.array(nc.variables['lsm_psi'][:]),
+                            'lsm_rho': np.array(nc.variables['lsm_rho'][:]),
+                            'lon_rho': np.array(nc.variables['lon_rho'][:]),
+                            'lon_psi': np.array(nc.variables['lon_psi'][:]),
+                            'lat_rho': np.array(nc.variables['lat_rho'][:]),
+                            'lat_psi': np.array(nc.variables['lat_psi'][:]),
+                            'cdist_rho': np.array(nc.variables['cdist_rho'][:]),
+                            'cnormx_rho': np.array(nc.variables['cnormx_rho'][:]),
+                            'cnormy_rho': np.array(nc.variables['cnormy_rho'][:]),
+                            'source_id_psi': np.array(nc.variables['source_id_psi']),
+                            'sink_id_psi': np.array(nc.variables['sink_id_psi']),
+                            'iso_psi': np.array(nc.variables['iso_psi']),
+                            'cplastic_psi': np.array(nc.variables['cplastic_psi']),
+                            'rplastic_psi': np.array(nc.variables['rplastic_psi'])}
             else:
                 print('Grid file found, loading data (without plastics)')
                 grid = {'coast_psi': np.array(nc.variables['coast_psi'][:]),
@@ -443,6 +444,11 @@ def gridgen(fh, dirs, param, **kwargs):
                                    [-4.485, 55.220], # Silhouette
                                    [-4.585, 55.940], # Fregate
                                    [-7.130, 56.270], # Coetivy
+                                   [-9.720, 46.510], # Assomption
+                                   [-10.09, 47.740], # Astove
+                                   [-5.430, 53.350], # St. Joseph/D'Arros
+                                   [-5.690, 53.675], # Desroches
+                                   [-5.850, 55.390], # Platte
                                    ])
 
             island_loc = np.histogram2d(island_loc[:, 0],
@@ -565,6 +571,91 @@ def gridgen(fh, dirs, param, **kwargs):
 
             iso_psi = id_coast_cells(coast_psi.astype('int16'), country_id, country_id_nearest)
 
+            ##############################################################################
+            # Specifically label Seychelles coastal cells ################################
+            ##############################################################################
+
+            sink_id_psi = np.zeros_like(iso_psi)
+            sink_loc = np.where(np.isin(iso_psi, param['id']))
+            sink_id_psi[sink_loc] = 1
+
+            # (1) Aldabra
+            sink_id_psi[(lat_psi_grd > -9.5)*(lat_psi_grd < -9.0)*
+                        (lon_psi_grd > 46.0)*(lon_psi_grd < 47.0)] *= 1
+
+            # (2) Assomption
+            sink_id_psi[(lat_psi_grd > -10.0)*(lat_psi_grd < -9.5)*
+                        (lon_psi_grd > 46.0)*(lon_psi_grd < 47.0)] *= 2
+
+            # (3) Cosmoledo
+            sink_id_psi[(lat_psi_grd > -10.0)*(lat_psi_grd < -9.0)*
+                        (lon_psi_grd > 47.0)*(lon_psi_grd < 48.0)] *= 3
+
+            # (4) Astove
+            sink_id_psi[(lat_psi_grd > -10.5)*(lat_psi_grd < -10.0)*
+                        (lon_psi_grd > 47.0)*(lon_psi_grd < 48.0)] *= 4
+
+            # (5) Providence
+            sink_id_psi[(lat_psi_grd > -10.0)*(lat_psi_grd < -9.0)*
+                        (lon_psi_grd > 50.5)*(lon_psi_grd < 51.5)] *= 5
+
+            # (6) Farquhar
+            sink_id_psi[(lat_psi_grd > -10.5)*(lat_psi_grd < -10.0)*
+                        (lon_psi_grd > 50.5)*(lon_psi_grd < 51.5)] *= 6
+
+            # (7) Alphonse
+            sink_id_psi[(lat_psi_grd > -7.5)*(lat_psi_grd < -7.0)*
+                        (lon_psi_grd > 52.0)*(lon_psi_grd < 53.0)] *= 7
+
+            # (8) Poivre
+            sink_id_psi[(lat_psi_grd > -6.0)*(lat_psi_grd < -5.5)*
+                        (lon_psi_grd > 53.0)*(lon_psi_grd < 53.5)] *= 8
+
+            # (9) St Joseph
+            sink_id_psi[(lat_psi_grd > -5.5)*(lat_psi_grd < -5.25)*
+                        (lon_psi_grd > 53.0)*(lon_psi_grd < 53.5)] *= 9
+
+            # (10) Desroches
+            sink_id_psi[(lat_psi_grd > -6.0)*(lat_psi_grd < -5.5)*
+                        (lon_psi_grd > 53.5)*(lon_psi_grd < 54.0)] *= 10
+
+            # (11) Platte
+            sink_id_psi[(lat_psi_grd > -6.0)*(lat_psi_grd < -5.5)*
+                        (lon_psi_grd > 55.0)*(lon_psi_grd < 55.5)] *= 11
+
+            # (12) Coetivy
+            sink_id_psi[(lat_psi_grd > -7.5)*(lat_psi_grd < -7.0)*
+                        (lon_psi_grd > 56.0)*(lon_psi_grd < 56.5)] *= 12
+
+            # (13) Mahe
+            sink_id_psi[(lat_psi_grd > -5.0)*(lat_psi_grd < -4.5)*
+                        (lon_psi_grd > 55.0)*(lon_psi_grd < 55.5)] *= 13
+
+            # (14) Fregate
+            sink_id_psi[(lat_psi_grd > -5.0)*(lat_psi_grd < -4.5)*
+                        (lon_psi_grd > 55.5)*(lon_psi_grd < 56.0)] *= 14
+
+            # (15) Silhouette
+            sink_id_psi[(lat_psi_grd > -4.5)*(lat_psi_grd < -4.0)*
+                        (lon_psi_grd > 55.0)*(lon_psi_grd < 55.5)] *= 15
+
+            # (16) Praslin
+            sink_id_psi[(lat_psi_grd > -4.5)*(lat_psi_grd < -4.0)*
+                        (lon_psi_grd > 55.5)*(lon_psi_grd < 56.0)] *= 16
+
+            # (17) Denis
+            sink_id_psi[(lat_psi_grd > -4.0)*(lat_psi_grd < -3.5)*
+                        (lon_psi_grd > 55.5)*(lon_psi_grd < 56.0)] *= 17
+
+            # (18) Bird
+            sink_id_psi[(lat_psi_grd > -4.0)*(lat_psi_grd < -3.5)*
+                        (lon_psi_grd > 55.0)*(lon_psi_grd < 55.5)] *= 18
+
+
+            ##############################################################################
+            # Calculate total plastic budget #############################################
+            ##############################################################################
+
             total_coastal_plastic = '{:3.2f}'.format(np.sum(cplastic)/1e9) + ' Mt yr-1'
             total_riverine_plastic = '{:3.2f}'.format(np.sum(rplastic)/1e9) + ' Mt yr-1'
 
@@ -637,11 +728,11 @@ def gridgen(fh, dirs, param, **kwargs):
             nc.variables['coast_psi'].standard_name = 'coast_mask_psi'
             nc.variables['coast_psi'][:] = coast_psi
 
-            nc.createVariable('id_psi', 'i4', ('lat_psi', 'lon_psi'), zlib=True)
-            nc.variables['id_psi'].long_name = 'cell_id_on_psi_grid'
-            nc.variables['id_psi'].units = 'no units'
-            nc.variables['id_psi'].standard_name = 'id_psi'
-            nc.variables['id_psi'][:] = id_psi
+            nc.createVariable('source_id_psi', 'i4', ('lat_psi', 'lon_psi'), zlib=True)
+            nc.variables['source_id_psi'].long_name = 'source_cell_id_on_psi_grid'
+            nc.variables['source_id_psi'].units = 'no units'
+            nc.variables['source_id_psi'].standard_name = 'source_id_psi'
+            nc.variables['source_id_psi'][:] = id_psi
 
             # Global attributes
             date = datetime.now()
@@ -656,7 +747,6 @@ def gridgen(fh, dirs, param, **kwargs):
                 nc.variables['cplastic_psi'].total_flux = total_coastal_plastic
                 nc.variables['cplastic_psi'][:] = cplastic
 
-
                 nc.createVariable('rplastic_psi', 'f8', ('lat_psi', 'lon_psi'), zlib=True)
                 nc.variables['rplastic_psi'].long_name = 'plastic_flux_at_coast_psi_from_riverine_sources'
                 nc.variables['rplastic_psi'].units = 'kg yr-1'
@@ -669,6 +759,12 @@ def gridgen(fh, dirs, param, **kwargs):
                 nc.variables['iso_psi'].units = 'no units'
                 nc.variables['iso_psi'].standard_name = 'iso_psi'
                 nc.variables['iso_psi'][:] = iso_psi
+
+                nc.createVariable('sink_id_psi', 'i2', ('lat_psi', 'lon_psi'), zlib=True)
+                nc.variables['sink_id_psi'].long_name = 'sink_cell_id_on_psi_grid'
+                nc.variables['sink_id_psi'].units = 'no units'
+                nc.variables['sink_id_psi'].standard_name = 'sink_id_psi'
+                nc.variables['sink_id_psi'][:] = sink_id_psi
 
                 nc.country_id_source = 'https://sedac.ciesin.columbia.edu/data/collection/gpw-v4/sets/browse'
                 nc.coast_plastic_source = 'https://www.nature.com/articles/s41599-018-0212-7'
@@ -684,7 +780,8 @@ def gridgen(fh, dirs, param, **kwargs):
                             'cdist_rho': np.array(nc.variables['cdist_rho'][:]),
                             'cnormx_rho': np.array(nc.variables['cnormx_rho'][:]),
                             'cnormy_rho': np.array(nc.variables['cnormy_rho'][:]),
-                            'id_psi': np.array(nc.variables['id_psi']),
+                            'source_id_psi': np.array(nc.variables['source_id_psi']),
+                            'sink_id_psi': np.array(nc.variables['sink_id_psi']),
                             'iso_psi': np.array(nc.variables['iso_psi']),
                             'cplastic_psi': np.array(nc.variables['cplastic_psi']),
                             'rplastic_psi': np.array(nc.variables['rplastic_psi'])}
