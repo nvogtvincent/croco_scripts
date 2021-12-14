@@ -60,7 +60,7 @@ param = {# Release timing
          # Runtime parameters
          'Yend'              : y_in,                 # Last year of simulation
          'Mend'              : 12   ,                    # Last month
-         'Dend'              : 10   ,                    # Last day (00:00, start)
+         'Dend'              : 5   ,                    # Last day (00:00, start)
          'dt_RK4'            : timedelta(minutes=30),  # RK4 time-step
 
          # Output parameters
@@ -295,13 +295,13 @@ class debris(JITParticle):
     iso = Variable('iso',
                    dtype=np.int32,
                    initial=0,
-                   to_write=False)
+                   to_write=True)
 
     # Sink ID of current cell (>0 if in specific sink cell)
     sink_id = Variable('sink_id',
                    dtype=np.int32,
                    initial=0,
-                   to_write=False)
+                   to_write=True)
 
     # Source cell ID (specifically identifying source cell)
     source_id = Variable('source_id',
@@ -379,7 +379,7 @@ class debris(JITParticle):
     e_num = Variable('e_num',
                      dtype=np.int16,
                      initial=0,
-                     to_write=False)
+                     to_write=True)
 
     # Event 0
     e0 = Variable('e0',
@@ -415,10 +415,110 @@ class debris(JITParticle):
     # TEMPORARY VARIABLES FOR TESTING ########################################
     ##########################################################################
 
+    # Particle mass
+    mass = Variable('mass',
+                    dtype=np.float64,
+                    initial=1.,
+                    to_write=True)
+
+    # Particle mass lost to event loc 0
+    m0 = Variable('m0',
+                  dtype=np.float64,
+                  initial=0.,
+                  to_write=True)
+
+    # Particle mass lost to event loc 1
+    m1 = Variable('m1',
+                  dtype=np.float64,
+                  initial=0.,
+                  to_write=True)
+
+    # Particle mass lost to event loc 2
+    m2 = Variable('m2',
+                  dtype=np.float64,
+                  initial=0.,
+                  to_write=True)
+
+    # Particle mass lost to event loc 3
+    m3 = Variable('m3',
+                  dtype=np.float64,
+                  initial=0.,
+                  to_write=True)
+
+    # Particle mass lost to event loc 4
+    m4 = Variable('m4',
+                  dtype=np.float64,
+                  initial=0.,
+                  to_write=True)
+
+    # Test variables
+    test1 = Variable('test1',
+                    dtype=np.float64,
+                    initial=0.,
+                    to_write=True)
+
+    test2 = Variable('test2',
+                    dtype=np.float64,
+                    initial=0.,
+                    to_write=True)
+
+    test3 = Variable('test3',
+                    dtype=np.float64,
+                    initial=0.,
+                    to_write=True)
+
 
 ##############################################################################
 # KERNELS ####################################################################
 ##############################################################################
+
+def testing_mass(particle, fieldset, time):
+    # Testing kernel to ensure that post-run calculations for mass fluxes are correct
+    ls = 3.17e-9 # sinking
+    lb = 5.79e-7 # beaching
+
+    # Subtract mass due to losses from sinking
+    particle.mass -= particle.mass*particle.dt*ls
+
+    # Subtract mass due to losses from beaching
+    if particle.sink_id > 0:
+        if particle.e_num == 0:
+            particle.m0 += particle.mass*particle.dt*lb
+            particle.mass -= particle.mass*particle.dt*lb
+        elif particle.e_num == 1:
+            particle.m1 += particle.mass*particle.dt*lb
+            particle.mass -= particle.mass*particle.dt*lb
+        elif particle.e_num == 2:
+            particle.m2 += particle.mass*particle.dt*lb
+            particle.mass -= particle.mass*particle.dt*lb
+        elif particle.e_num == 3:
+            particle.m3 += particle.mass*particle.dt*lb
+            particle.mass -= particle.mass*particle.dt*lb
+        elif particle.e_num == 4:
+            particle.m4 += particle.mass*particle.dt*lb
+            particle.mass -= particle.mass*particle.dt*lb
+    elif particle.iso > 0:
+        particle.mass -= particle.mass*particle.dt*lb
+
+    # if particle.sink_id > 0:
+    #     if particle.e_num == 0:
+    #         particle.m0 += particle.mass*(1/100)
+    #         particle.mass -= particle.mass*(1/100)
+    #     elif particle.e_num == 1:
+    #         particle.m1 += particle.mass*(1/100)
+    #         particle.mass -= particle.mass*(1/100)
+    #     elif particle.e_num == 2:
+    #         particle.m2 += particle.mass*(1/100)
+    #         particle.mass -= particle.mass*(1/100)
+    #     elif particle.e_num == 3:
+    #         particle.m3 += particle.mass*(1/100)
+    #         particle.mass -= particle.mass*(1/100)
+    #     elif particle.e_num == 4:
+    #         particle.m4 += particle.mass*(1/100)
+    #         particle.mass -= particle.mass*(1/100)
+    # elif particle.iso > 0:
+    #     particle.mass -= particle.mass*(1/100)
+
 
 def time_at_coast(particle, fieldset, time):
     # Keep track of the amount of time spent within a coastal cell
@@ -583,15 +683,17 @@ traj = pset.ParticleFile(name=fh['traj'],
 
 if param['max_age']:
     kernels = (pset.Kernel(AdvectionRK4) +
-               pset.Kernel(event) +
                pset.Kernel(time_at_coast) +
+               pset.Kernel(event) +
+               pset.Kernel(testing_mass) +
                pset.Kernel(antibeach) +
                pset.Kernel(time_at_sea) +
                pset.Kernel(periodicBC))
 else:
     kernels = (pset.Kernel(AdvectionRK4) +
-               pset.Kernel(event) +
                pset.Kernel(time_at_coast) +
+               pset.Kernel(event) +
+               pset.Kernel(testing_mass) +
                pset.Kernel(antibeach) +
                pset.Kernel(periodicBC))
 
@@ -713,7 +815,7 @@ if param['test']:
 
     for particle in range(pnum):
         ax.plot(plon[particle, :], plat[particle, :], 'w-', linewidth=0.5)
-        ax.scatter(plon[particle, :], plat[particle, :])
+        # ax.scatter(plon[particle, :], plat[particle, :])
 
     # Save
     plt.savefig(dirs['script'] + '/' + 'test_fig.png', dpi=300)
