@@ -144,17 +144,17 @@ if not param['test']:
 else:
     if param['line_rel']:
         particles['loc_array'] = {}
-        particles['loc_array']['lon0'] = 49.6
-        particles['loc_array']['lon1'] = 49.6
-        particles['loc_array']['lat0'] = -12.4
-        particles['loc_array']['lat1'] = -11.8
+        particles['loc_array']['lon0'] = 46.65
+        particles['loc_array']['lon1'] = 46.65
+        particles['loc_array']['lat0'] = -10.0
+        particles['loc_array']['lat1'] = -9.0
 
         particles['loc_array']['ll'] = [np.linspace(particles['loc_array']['lon0'],
                                                     particles['loc_array']['lon1'],
-                                                    num=10),
+                                                    num=20),
                                         np.linspace(particles['loc_array']['lat0'],
                                                     particles['loc_array']['lat1'],
-                                                    num=10),]
+                                                    num=20),]
 
 
         particles['loc_array']['lon'] = particles['loc_array']['ll'][0].flatten()
@@ -182,8 +182,8 @@ variables = {'U': 'uo',
 dimensions = {'U': {'lon': 'longitude', 'lat': 'latitude', 'time': 'time'},
               'V': {'lon': 'longitude', 'lat': 'latitude', 'time': 'time'}}
 
-interp_method = {'U' : 'linear',
-                 'V' : 'linear'}
+interp_method = {'U' : 'freeslip',
+                 'V' : 'freeslip'}
 
 fieldset_ocean = FieldSet.from_netcdf(filenames, variables, dimensions,
                                       interp_method=interp_method)
@@ -195,11 +195,11 @@ if param['stokes']:
     variables = {'U': 'VSDX',
                  'V': 'VSDY'}
 
-    dimensions = {'U': {'lon': 'longitude', 'lat': 'latitude', 'time': 'time'},
-                  'V': {'lon': 'longitude', 'lat': 'latitude', 'time': 'time'}}
+    dimensions = {'U': {'lon': 'lon_rho', 'lat': 'lat_rho', 'time': 'time'},
+                  'V': {'lon': 'lon_rho', 'lat': 'lat_rho', 'time': 'time'}}
 
-    interp_method = {'U' : 'linear',
-                     'V' : 'linear'}
+    interp_method = {'U' : 'freeslip',
+                     'V' : 'freeslip'}
 
     fieldset_wave = FieldSet.from_netcdf(filenames, variables, dimensions,
                                          interp_method=interp_method)
@@ -379,13 +379,42 @@ class debris(JITParticle):
     e_num = Variable('e_num',
                      dtype=np.int16,
                      initial=0,
-                     to_write=True)
+                     to_write=False)
 
     # Event 0
     e0 = Variable('e0',
                   dtype=np.int64,
                   initial=0,
                   to_write=True)
+
+    # Event 0
+    e1 = Variable('e1',
+                  dtype=np.int64,
+                  initial=0,
+                  to_write=True)
+
+    # Event 0
+    e2 = Variable('e2',
+                  dtype=np.int64,
+                  initial=0,
+                  to_write=True)
+
+    # Event 0
+    e3 = Variable('e3',
+                  dtype=np.int64,
+                  initial=0,
+                  to_write=True)
+
+    # Event 0
+    e4 = Variable('e4',
+                  dtype=np.int64,
+                  initial=0,
+                  to_write=True)
+
+    ##########################################################################
+    # TEMPORARY VARIABLES FOR TESTING ########################################
+    ##########################################################################
+
 
 ##############################################################################
 # KERNELS ####################################################################
@@ -413,43 +442,99 @@ def event(particle, fieldset, time):
     # Controller for managing particle events
     particle.sink_id = fieldset.sink_id_psi[particle]
 
+    save_event = False
+    new_event = False
+
     # Trigger event if particle is within selected sink site
     if particle.sink_id > 0:
 
         # Check if event has already been triggered
         if particle.actual_sink_status > 0:
 
-            # If event has been triggered already, just add time
-            particle.actual_sink_status += particle.dt
+            # Check if we are in the same sink cell as the current event
+            if particle.sink_id == particle.actual_sink_id:
+
+                # If contiguous event, just add time
+                particle.actual_sink_status += particle.dt
+
+                # But also check that the particle isn't about to expire (save if so)
+                # Otherwise particles hanging around coastal regions forever won't get saved
+                if particle.ot > fieldset.max_age - 3600:
+                    save_event = True
+
+            else:
+
+                # Otherwise, we need to save the old event and create a new event
+                save_event = True
+                new_event = True
 
         else:
 
             # If event has not been triggered, create a new event
-            particle.actual_sink_status += particle.dt
-            particle.actual_sink_t0 = particle.ot
-            particle.actual_sink_ct = particle.ct
-            particle.actual_sink_id = particle.sink_id
+            new_event = True
 
     else:
 
         # Otherwise, check if ongoing event has just ended
         if particle.actual_sink_status > 0:
 
-            if particle.e_num < 1:
-                # End current event
-                # UPDATE FOR MULTIPLE EVENTS
-                particle.e0 += (particle.actual_sink_t0/particle.dt)
-                particle.e0 += (particle.actual_sink_ct/particle.dt)*2**20
-                particle.e0 += (particle.actual_sink_status/particle.dt)*2**40
-                particle.e0 += (particle.actual_sink_id)*2**52
+            save_event = True
 
-                # Then reset actual values to zero
-                particle.actual_sink_t0 = 0
-                particle.actual_sink_ct = 0
-                particle.actual_sink_status = 0
-                particle.actual_sink_id = 0
+    if save_event:
+        # Save actual values
+        # Unfortunately, due to the limited functions allowed in parcels, this
+        # required a horrendous if-else chain
 
-        # Otherwise, do nothing
+        if particle.e_num == 0:
+            particle.e0 += (particle.actual_sink_t0/particle.dt)
+            particle.e0 += (particle.actual_sink_ct/particle.dt)*2**20
+            particle.e0 += (particle.actual_sink_status/particle.dt)*2**40
+            particle.e0 += (particle.actual_sink_id)*2**52
+
+        elif particle.e_num == 1:
+            particle.e1 += (particle.actual_sink_t0/particle.dt)
+            particle.e1 += (particle.actual_sink_ct/particle.dt)*2**20
+            particle.e1 += (particle.actual_sink_status/particle.dt)*2**40
+            particle.e1 += (particle.actual_sink_id)*2**52
+
+        elif particle.e_num == 2:
+            particle.e2 += (particle.actual_sink_t0/particle.dt)
+            particle.e2 += (particle.actual_sink_ct/particle.dt)*2**20
+            particle.e2 += (particle.actual_sink_status/particle.dt)*2**40
+            particle.e2 += (particle.actual_sink_id)*2**52
+
+        elif particle.e_num == 3:
+            particle.e3 += (particle.actual_sink_t0/particle.dt)
+            particle.e3 += (particle.actual_sink_ct/particle.dt)*2**20
+            particle.e3 += (particle.actual_sink_status/particle.dt)*2**40
+            particle.e3 += (particle.actual_sink_id)*2**52
+
+        elif particle.e_num == 4:
+            particle.e4 += (particle.actual_sink_t0/particle.dt)
+            particle.e4 += (particle.actual_sink_ct/particle.dt)*2**20
+            particle.e4 += (particle.actual_sink_status/particle.dt)*2**40
+            particle.e4 += (particle.actual_sink_id)*2**52
+
+            particle.delete() # Delete particle, since no more sinks can be saved
+
+        else:
+            particle.delete()
+
+        # Then reset actual values to zero
+        particle.actual_sink_t0 = 0
+        particle.actual_sink_ct = 0
+        particle.actual_sink_status = 0
+        particle.actual_sink_id = 0
+
+        # Add to event number counter
+        particle.e_num += 1
+
+    if new_event:
+        # Add status to actual values
+        particle.actual_sink_status += particle.dt
+        particle.actual_sink_t0 = particle.ot
+        particle.actual_sink_ct = particle.ct
+        particle.actual_sink_id = particle.sink_id
 
 
 def deleteParticle(particle, fieldset, time):
@@ -461,18 +546,13 @@ def antibeach(particle, fieldset, time):
     #  Kernel to repel particles from the coast
     particle.cd = fieldset.cdist_rho[particle]
 
-    if particle.cd < 0.5:
+    if particle.cd < 0.2:
 
         particle.uc = fieldset.cnormx_rho[particle]
         particle.vc = fieldset.cnormy_rho[particle]
 
-        if particle.cd > 0.1:
-            particle.uc *= 1*(particle.cd - 0.5)**2
-            particle.vc *= 1*(particle.cd - 0.5)**2
-        else:
-            # Aggressive shifting is particle is <10% of grid cell from coast
-            particle.uc *= 1*(particle.cd - 0.5)**2 + 100*(particle.cd - 0.1)**2
-            particle.vc *= 1*(particle.cd - 0.5)**2 + 100*(particle.cd - 0.1)**2
+        particle.uc *= 5*(particle.cd - 0.2)**2
+        particle.vc *= 5*(particle.cd - 0.2)**2
 
         particle.lon += particle.uc*particle.dt
         particle.lat += particle.vc*particle.dt
@@ -530,7 +610,7 @@ traj.export()
 
 if param['test']:
     # Set display region
-    (lon_min, lon_max, lat_min, lat_max) = (49, 50, -12.4, -11.4)
+    (lon_min, lon_max, lat_min, lat_max) = (45.7, 46.7, -10.0, -9.0)
 
     # Import grids
     with Dataset(fh['grid'], mode='r') as nc:
@@ -633,6 +713,7 @@ if param['test']:
 
     for particle in range(pnum):
         ax.plot(plon[particle, :], plat[particle, :], 'w-', linewidth=0.5)
+        ax.scatter(plon[particle, :], plat[particle, :])
 
     # Save
     plt.savefig(dirs['script'] + '/' + 'test_fig.png', dpi=300)

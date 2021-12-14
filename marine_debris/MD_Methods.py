@@ -245,7 +245,7 @@ def release_loc(param, fh):
 
         lon_rho = np.array(nc.variables['lon_rho'][:])
 
-        id_psi    = np.array(nc.variables['id_psi'][:])
+        id_psi    = np.array(nc.variables['source_id_psi'][:])
         iso_psi   = np.array(nc.variables['iso_psi'][:])
 
     # Now find the cells matching the provided ISO codes
@@ -400,7 +400,7 @@ def gridgen(fh, dirs, param, **kwargs):
                             'cdist_rho': np.array(nc.variables['cdist_rho'][:]),
                             'cnormx_rho': np.array(nc.variables['cnormx_rho'][:]),
                             'cnormy_rho': np.array(nc.variables['cnormy_rho'][:]),
-                            'id_psi': np.array(nc.variables['id_psi'])}
+                            'source_id_psi': np.array(nc.variables['source_id_psi'])}
 
     else:
         print('Grid file not found, building grid file')
@@ -796,7 +796,7 @@ def gridgen(fh, dirs, param, **kwargs):
                             'cdist_rho': np.array(nc.variables['cdist_rho'][:]),
                             'cnormx_rho': np.array(nc.variables['cnormx_rho'][:]),
                             'cnormy_rho': np.array(nc.variables['cnormy_rho'][:]),
-                            'id_psi': np.array(nc.variables['id_psi'])}
+                            'source_id_psi': np.array(nc.variables['source_id_psi'])}
 
     return grid
 
