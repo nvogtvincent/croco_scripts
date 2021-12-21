@@ -21,6 +21,10 @@ import time
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 
+# To do:
+# Add FADs
+# Add total count
+
 ###############################################################################
 # Parameters ##################################################################
 ###############################################################################
@@ -31,18 +35,20 @@ param = {'grid_res': 1.0,                          # Grid resolution in degrees
          'lat_range': [-50, 30],                   # Latitude range for output
 
          'dict_name': 'mmsi_dict.pkl',
-         'out_name': 'fisheries_waste_flux.png'}
+         'out_name': 'fisheries_waste_flux_'}
 
 # DIRECTORIES
 dirs = {'script': os.path.dirname(os.path.realpath(__file__)),
         'data_obs': os.path.dirname(os.path.realpath(__file__)) + '/DATA/OBS/',
         'data_ref': os.path.dirname(os.path.realpath(__file__)) + '/DATA/REF/',
+        'data_proc': os.path.dirname(os.path.realpath(__file__)) + '/DATA/PROC/',
         'fig': os.path.dirname(os.path.realpath(__file__)) + '/FIGURES/'}
 
 # FILE HANDLES
 fh = {'obs': [],
       'ref_raw': dirs['data_ref'] + 'fishing-vessels-v2.csv',
       'ref_proc': dirs['data_ref'] + 'mmsi_lookup.pkl',
+      'proc': dirs['data_proc'] + 'GFW_gridded.nc',
       'fig': dirs['fig'] + param['out_name']}
 
 for path, subdirs, files in os.walk(dirs['data_obs']):
@@ -222,9 +228,12 @@ def dictgen(file_in, file_out, gear_intensity):
 # (2) Find MMSI in dictionary and find mass moment per hour and vessel class
 # (3) Grid datapoint
 
-def grid_effort(file, grid, mmsi_lookup, lon_bnd, lat_bnd):
-    # Get year
+def grid_effort(file, grid_set, mmsi_lookup, lon_bnd, lat_bnd):
+    print(file)
+    # Get year, month, and time index
     year = file.split('/')[-1].split('-')[0]
+    month = file.split('/')[-1].split('-')[1]
+    t_idx = int(month) - 1 + (int(year)-2012)*12
 
     # Load data
     data = pd.read_csv(file,
@@ -267,33 +276,35 @@ def grid_effort(file, grid, mmsi_lookup, lon_bnd, lat_bnd):
 
     # Now grid
     for i, vtype in enumerate(['seiners', 'trawlers_and_dredgers', 'fixed_gear',
-                               'drifting_longlines', 'squid_jigger',
-                               'pole_and_line_and_trollers', 'fishing', 'all']):
+                                'drifting_longlines', 'squid_jiggers',
+                                'pole_and_line_and_trollers', 'unclassified', 'all']):
 
         if vtype == 'all':
-            grid[i, :, :] += np.histogram2d(data['cell_ll_lon'],
-                                            data['cell_ll_lat'],
-                                            bins=[lon_bnd, lat_bnd],
-                                            weights=data['mass_rate_A'])[0].T
+            grid_set[0][i][t_idx, :, :] += np.histogram2d(data['cell_ll_lon'],
+                                                          data['cell_ll_lat'],
+                                                          bins=[lon_bnd, lat_bnd],
+                                                          weights=data['mass_rate_A'])[0].T
 
-            grid[i+8, :, :] += np.histogram2d(data['cell_ll_lon'],
-                                            data['cell_ll_lat'],
-                                            bins=[lon_bnd, lat_bnd],
-                                            weights=data['mass_rate_B'])[0].T
+            grid_set[1][i][t_idx, :, :] += np.histogram2d(data['cell_ll_lon'],
+                                                          data['cell_ll_lat'],
+                                                          bins=[lon_bnd, lat_bnd],
+                                                          weights=data['mass_rate_B'])[0].T
+            grid_set[2][i][t_idx] += len(data)
+
         else:
             subdata = data[data['vessel_class'] == vtype]
-            grid[i, :, :] += np.histogram2d(subdata['cell_ll_lon'],
-                                            subdata['cell_ll_lat'],
-                                            bins=[lon_bnd, lat_bnd],
-                                            weights=subdata['mass_rate_A'])[0].T
+            grid_set[0][i][t_idx, :, :] += np.histogram2d(subdata['cell_ll_lon'],
+                                                          subdata['cell_ll_lat'],
+                                                          bins=[lon_bnd, lat_bnd],
+                                                          weights=subdata['mass_rate_A'])[0].T
 
-            subdata = data[data['vessel_class'] == vtype]
-            grid[i+8, :, :] += np.histogram2d(subdata['cell_ll_lon'],
-                                            subdata['cell_ll_lat'],
-                                            bins=[lon_bnd, lat_bnd],
-                                            weights=subdata['mass_rate_B'])[0].T
+            grid_set[1][i][t_idx, :, :] += np.histogram2d(subdata['cell_ll_lon'],
+                                                          subdata['cell_ll_lat'],
+                                                          bins=[lon_bnd, lat_bnd],
+                                                          weights=subdata['mass_rate_B'])[0].T
+            grid_set[2][i][t_idx] += len(subdata)
 
-    return grid
+    return grid_set
 
 
 ###############################################################################
@@ -302,69 +313,243 @@ def grid_effort(file, grid, mmsi_lookup, lon_bnd, lat_bnd):
 
 if __name__ == '__main__':
 
-    # Generate grid
-    lon_bnd = np.linspace(param['lon_range'][0],
-                          param['lon_range'][1],
-                          int((param['lon_range'][1] -
-                               param['lon_range'][0])/param['grid_res'])+1)
+    if not os.path.isfile(fh['proc']):
 
-    lat_bnd = np.linspace(param['lat_range'][0],
-                          param['lat_range'][1],
-                          int((param['lat_range'][1] -
-                               param['lat_range'][0])/param['grid_res'])+1)
+        # Generate grid
+        lon_bnd = np.linspace(param['lon_range'][0],
+                              param['lon_range'][1],
+                              int((param['lon_range'][1] -
+                                   param['lon_range'][0])/param['grid_res'])+1)
 
-    lon = 0.5*(lon_bnd[1:] + lon_bnd[:-1])
-    lat = 0.5*(lat_bnd[1:] + lat_bnd[:-1])
+        lat_bnd = np.linspace(param['lat_range'][0],
+                              param['lat_range'][1],
+                              int((param['lat_range'][1] -
+                                   param['lat_range'][0])/param['grid_res'])+1)
 
-    grid = np.zeros((16, len(lat), len(lon)), dtype=np.float64)
+        lon = 0.5*(lon_bnd[1:] + lon_bnd[:-1])
+        lat = 0.5*(lat_bnd[1:] + lat_bnd[:-1])
 
-    # Generate MMSI dict
-    try:
-        mmsi_lookup = pd.read_pickle(fh['ref_proc'])
-    except:
-        mmsi_lookup = dictgen(fh['ref_raw'], fh['ref_proc'], gear_intensity)
+        # Generate a set of grids
+        grid_set_A = []  # Grids from assumption A
+        grid_set_B = []  # Grids from assumption B
+        grid_number = [] # Keep track of number of observations
+        for k in range(8):
+            # First dimension = time (monthly, 2012 - 2020)
+            grid_set_A.append(np.zeros((9*12+1, len(lat), len(lon)), dtype=np.float64))
+            grid_set_B.append(np.zeros((9*12+1, len(lat), len(lon)), dtype=np.float64))
+            grid_number.append(np.zeros((9*12+1), dtype=np.int32))
 
-    # Grid fishing effort
-    for k, file in enumerate(fh['obs']):
-        grid = grid_effort(file, grid, mmsi_lookup, lon_bnd, lat_bnd)
-        print('{:.2f}'.format(100*k/len(fh['obs'])) + '%')
+        grid_set = [grid_set_A, grid_set_B, grid_number]
 
+        # Generate MMSI dict
+        try:
+            mmsi_lookup = pd.read_pickle(fh['ref_proc'])
+        except:
+            mmsi_lookup = dictgen(fh['ref_raw'], fh['ref_proc'], gear_intensity)
 
-    # Plot output
-    f0, ax = plt.subplots(2, 4, figsize=(20, 10),
-                          subplot_kw={'projection': ccrs.PlateCarree()})
-    f0.subplots_adjust(hspace=0.01, wspace=0.01, top=0.925, left=0.05)
+        # Grid fishing effort
+        for k, file in enumerate(fh['obs']):
+            grid_set = grid_effort(file, grid_set, mmsi_lookup, lon_bnd, lat_bnd)
+            print('{:.2f}'.format(100*k/len(fh['obs'])) + '%')
 
-    axpos = ax[-1, -1].get_position()
-    pos_x = axpos.x0+axpos.width + 0.01
-    pos_y = axpos.y0
-    cax_width = 0.015
-    cax_height = 2.01*axpos.height
+        # Now also calculate the time integral for all
+        for k1 in range(2):
+            for k2 in range(8):
+                grid_set[k1][k2][-1, :, :] = np.sum(grid_set[k1][k2][:-1, :, :], axis=0)
 
-    pos_cax = f0.add_axes([pos_x, pos_y, cax_width, cax_height])
+                if k1 == 0:
+                    grid_set[2][k2][-1] = np.sum(grid_set[2][k2][:-1])
 
-    land_10m = cfeature.NaturalEarthFeature('physical', 'land', '10m',
-                                            edgecolor='face',
-                                            facecolor='black')
+        # Now export to netcdf
 
-    text_labels = ['Seiners', 'Trawlers and dredgers', 'Fixed gear',
-                   'Drifting longlines', 'Squid jiggers',
-                   'Pole and line, and trollers', 'Unclassified', 'All']
+        # Save to netcdf
+        with Dataset(fh['proc'], mode='w') as nc:
+            # Create the dimensions
+            nc.createDimension('lon', len(lon))
+            nc.createDimension('lat', len(lat))
+            nc.createDimension('lon_bnd', len(lon_bnd))
+            nc.createDimension('lat_bnd', len(lat_bnd))
+            nc.createDimension('time', 9*12)
 
-    for i in range(8):
-        axis = ax.flatten()[i]
-        grid_data = grid[i, :, :]
-        grid_data[np.isnan(grid_data)] = 0  # But why are NaNs appearing in the first place?
-        grid_data_nonzero = np.copy(grid_data)
-        grid_data_nonzero[grid_data == 0] = np.nan
-        p05 = np.nanpercentile(grid_data_nonzero, 5)
-        p95 = np.nanpercentile(grid_data_nonzero, 95)
-        heatmap = axis.pcolormesh(lon_bnd, lat_bnd, grid_data/p95, cmap=cmr.chroma_r,
-                                             norm=colors.LogNorm(vmin=1e-3, vmax=1))
-        axis.add_feature(land_10m)
-        axis.text(98, 26, text_labels[i], c='w', horizontalalignment='right')
+            nc.createVariable('lon', 'f4', ('lon'), zlib=True)
+            nc.variables['lon'].long_name = 'longitude'
+            nc.variables['lon'].units = 'degrees_east'
+            nc.variables['lon'].standard_name = 'longitude'
+            nc.variables['lon'][:] = lon
 
-        axis.axis('off')
+            nc.createVariable('lat', 'f4', ('lat'), zlib=True)
+            nc.variables['lat'].long_name = 'latitude'
+            nc.variables['lat'].units = 'degrees_north'
+            nc.variables['lat'].standard_name = 'latitude'
+            nc.variables['lat'][:] = lat
 
-    cb = plt.colorbar(heatmap, cax=pos_cax)
-    cb.outline.set_visible(False)
+            nc.createVariable('lon_bnd', 'f4', ('lon_bnd'), zlib=True)
+            nc.variables['lon_bnd'].long_name = 'longitude_(bounds)'
+            nc.variables['lon_bnd'].units = 'degrees_east'
+            nc.variables['lon_bnd'].standard_name = 'longitude_(bounds)'
+            nc.variables['lon_bnd'][:] = lon_bnd
+
+            nc.createVariable('lat_bnd', 'f4', ('lat_bnd'), zlib=True)
+            nc.variables['lat_bnd'].long_name = 'latitude_(bounds)'
+            nc.variables['lat_bnd'].units = 'degrees_north'
+            nc.variables['lat_bnd'].standard_name = 'latitude_(bounds)'
+            nc.variables['lat_bnd'][:] = lat_bnd
+
+            nc.createVariable('time', 'i4', ('time'), zlib=True)
+            nc.variables['time'].long_name = 'months_from_jan_2012'
+            nc.variables['time'].units = 'months'
+            nc.variables['time'].standard_name = 'time_(months)'
+            nc.variables['time'][:] = np.arange(9*12)
+
+            for k1, assumption in enumerate(['A', 'B']):
+                for k2, vtype in enumerate(['seiners', 'trawlers_and_dredgers', 'fixed_gear',
+                                            'drifting_longlines', 'squid_jiggers',
+                                            'pole_and_line_and_trollers', 'unclassified', 'all']):
+
+                    varname = vtype + '_' + assumption
+                    long_varname = vtype + '_normalised_mas_flux_(assumption_' + assumption + 'B)'
+
+                    nc.createVariable(varname, 'f8', ('time', 'lat', 'lon'), zlib=True)
+                    nc.variables[varname].long_name = long_varname
+                    nc.variables[varname].units = 'no_units'
+                    nc.variables[varname].standard_name = varname
+                    nc.variables[varname][:] = grid_set[k1][k2][:-1, :, :]
+
+                    nc.createVariable(varname + '_time_integral', 'f8', ('lat', 'lon'), zlib=True)
+                    nc.variables[varname + '_time_integral' ].long_name = long_varname + '_time_integral'
+                    nc.variables[varname + '_time_integral'].units = 'no_units'
+                    nc.variables[varname + '_time_integral'].standard_name = varname + '_time_integral'
+                    nc.variables[varname + '_time_integral'][:] = grid_set[k1][k2][-1, :, :]
+
+                    if k1 == 0:
+                        nc.createVariable(vtype + '_observation_numbers', 'i4', ('time'), zlib=True)
+                        nc.variables[vtype + '_observation_numbers'].long_name = vtype + '_observation_numbers'
+                        nc.variables[vtype + '_observation_numbers'].units = 'no_units'
+                        nc.variables[vtype + '_observation_numbers'].standard_name = vtype + '_observation_numbers'
+                        nc.variables[vtype + '_observation_numbers'][:] = grid_set[2][k2][:-1]
+
+                    nc.total_seiners = grid_set[2][0][-1]
+                    nc.total_trawlers_and_dredgers = grid_set[2][1][-1]
+                    nc.total_fixed_gear = grid_set[2][2][-1]
+                    nc.total_drifting_longlines = grid_set[2][3][-1]
+                    nc.total_squid_jiggers = grid_set[2][4][-1]
+                    nc.total_pole_and_line_and_trollers = grid_set[2][5][-1]
+                    nc.total_unclassified = grid_set[2][6][-1]
+                    nc.total_all = grid_set[2][7][-1]
+
+            # Global attributes
+            date = datetime.now()
+            date = date.strftime('%d/%m/%Y, %H:%M:%S')
+            nc.date_created = date
+
+    with Dataset(fh['proc'], mode='r') as nc:
+        lon_bnd = nc.variables['lon_bnd'][:]
+        lat_bnd = nc.variables['lat_bnd'][:]
+
+        assumption_A = []
+        assumption_B = []
+        total_num = []
+
+        for varname in ['seiners', 'trawlers_and_dredgers', 'fixed_gear',
+                        'drifting_longlines', 'squid_jigger',
+                        'pole_and_line_and_trollers', 'fishing', 'all']:
+
+            varname_A = varname + '_A_time_integral'
+            varname_B = varname + '_B_time_integral'
+
+            if varname == 'fishing':
+                varname = 'unclassified'
+            elif varname == 'squid_jigger':
+                varname = 'squid_jiggers'
+
+            varname_n = 'total_' + varname
+
+            assumption_A.append(nc.variables[varname_A][:])
+            assumption_B.append(nc.variables[varname_B][:])
+            total_num.append(getattr(nc, varname_n))
+
+        # Plot output (assumption A)
+        f0, ax = plt.subplots(2, 4, figsize=(20, 10),
+                              subplot_kw={'projection': ccrs.PlateCarree()})
+        f0.subplots_adjust(hspace=0.01, wspace=0.01, top=0.925, left=0.05)
+
+        axpos = ax[-1, -1].get_position()
+        pos_x = axpos.x0+axpos.width + 0.01
+        pos_y = axpos.y0
+        cax_width = 0.015
+        cax_height = 2.01*axpos.height
+
+        pos_cax = f0.add_axes([pos_x, pos_y, cax_width, cax_height])
+
+        land_10m = cfeature.NaturalEarthFeature('physical', 'land', '10m',
+                                                edgecolor='face',
+                                                facecolor='black')
+
+        text_labels = ['Seiners', 'Trawlers and dredgers', 'Fixed gear',
+                       'Drifting longlines', 'Squid jiggers',
+                       'Pole and line, and trollers', 'Unclassified', 'All']
+
+        for i, varname in enumerate(['seiners', 'trawlers_and_dredgers', 'fixed_gear',
+                                     'drifting_longlines', 'squid_jigger',
+                                     'pole_and_line_and_trollers', 'fishing', 'all']):
+
+            axis = ax.flatten()[i]
+            grid_data = np.copy(assumption_A[i])
+            grid_data[grid_data == 0] = np.nan
+            p05 = np.nanpercentile(grid_data, 5)
+            p95 = np.nanpercentile(grid_data, 95)
+            heatmap = axis.pcolormesh(lon_bnd, lat_bnd, grid_data/p95, cmap=cmr.chroma_r,
+                                                 norm=colors.LogNorm(vmin=1e-3, vmax=1))
+            axis.add_feature(land_10m)
+            axis.text(98, 26, text_labels[i], c='w', horizontalalignment='right')
+
+            axis.axis('off')
+
+        cb = plt.colorbar(heatmap, cax=pos_cax)
+        cb.outline.set_visible(False)
+
+        plt.savefig(fh['fig'] + '_A.png', dpi=300)
+
+        plt.close()
+
+        # Plot output (assumption B)
+        f0, ax = plt.subplots(2, 4, figsize=(20, 10),
+                              subplot_kw={'projection': ccrs.PlateCarree()})
+        f0.subplots_adjust(hspace=0.01, wspace=0.01, top=0.925, left=0.05)
+
+        axpos = ax[-1, -1].get_position()
+        pos_x = axpos.x0+axpos.width + 0.01
+        pos_y = axpos.y0
+        cax_width = 0.015
+        cax_height = 2.01*axpos.height
+
+        pos_cax = f0.add_axes([pos_x, pos_y, cax_width, cax_height])
+
+        land_10m = cfeature.NaturalEarthFeature('physical', 'land', '10m',
+                                                edgecolor='face',
+                                                facecolor='black')
+
+        text_labels = ['Seiners', 'Trawlers and dredgers', 'Fixed gear',
+                       'Drifting longlines', 'Squid jiggers',
+                       'Pole and line, and trollers', 'Unclassified', 'All']
+
+        for i, varname in enumerate(['seiners', 'trawlers_and_dredgers', 'fixed_gear',
+                                     'drifting_longlines', 'squid_jigger',
+                                     'pole_and_line_and_trollers', 'fishing', 'all']):
+
+            axis = ax.flatten()[i]
+            grid_data = np.copy(assumption_B[i])
+            grid_data[grid_data == 0] = np.nan
+            p05 = np.nanpercentile(grid_data, 5)
+            p95 = np.nanpercentile(grid_data, 95)
+            heatmap = axis.pcolormesh(lon_bnd, lat_bnd, grid_data/p95, cmap=cmr.chroma_r,
+                                                 norm=colors.LogNorm(vmin=1e-3, vmax=1))
+            axis.add_feature(land_10m)
+            axis.text(98, 26, text_labels[i], c='w', horizontalalignment='right')
+
+            axis.axis('off')
+
+        cb = plt.colorbar(heatmap, cax=pos_cax)
+        cb.outline.set_visible(False)
+
+        plt.savefig(fh['fig'] + '_B.png', dpi=300)
