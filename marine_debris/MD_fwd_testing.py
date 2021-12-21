@@ -42,14 +42,16 @@ part = 0
 param = {# Release timing
          'Ymin'              : y_in,          # First release year
          'Ymax'              : y_in,          # Last release year
-         'Mmin'              : 12   ,          # First release month
-         'Mmax'              : 12  ,          # Last release month
-         'RPM'               : 1   ,          # Releases per month
+         'Mmin'              : 9   ,          # First release month
+         'Mmax'              : 9  ,           # Last release month
          'mode'              :'START',        # Release at END or START
 
-         # Release location
-         'id'                : [690],         # ISO IDs of release countries
-         'pn'                : 4096,          # Particles to release per cell
+         # Release locations
+         'pn'                : 128,          # Particles to release per cell
+         'RPM'               : 1,             # Releases per month
+
+         # Sink locations
+         'id'                : [690],         # ISO IDs of sink countries
 
          # Simulation parameters
          'stokes'            : True,          # Toggle to use Stokes drift
@@ -59,41 +61,43 @@ param = {# Release timing
 
          # Runtime parameters
          'Yend'              : y_in,                 # Last year of simulation
-         'Mend'              : 12   ,                    # Last month
-         'Dend'              : 5   ,                    # Last day (00:00, start)
+         'Mend'              : 9   ,                    # Last month
+         'Dend'              : 2   ,                    # Last day (00:00, start)
          'dt_RK4'            : timedelta(minutes=30),  # RK4 time-step
 
          # Output parameters
-         'dt_out'            : timedelta(minutes=30),    # Output frequency
-         'fn_out'            : str(y_in) + '_' + str(part) + '_SeyBwd.nc',  # Output filename
+         'dt_out'            : timedelta(minutes=60),    # Output frequency
+         'fn_out'            : str(y_in) + '_' + str(part) + '_Fwd.nc',  # Output filename
 
          # Partitioning
          'total_partitions'  : tot_part,
          'partition'         : part,
 
          # Other parameters
-         'update'            : True,                   # Update grid files
-         'plastic'           : True,                   # Write plastic data
+         'plastic'           : True,                   # Write plastic source data
          'add_sey'           : True,                   # Add extra Sey islands
-         'p_param'           : {'l'  : 50.,            # Plastic length scale
-                                'cr' : 0.15},          # Fraction entering sea
+         'p_param'           : {'l'  : 25.,            # Plastic length scale
+                                'cr' : 0.25},          # Fraction entering sea
+         'plot_input'        : True,                   # Plot plastic input
 
-         'test'              : True,                  # Activate test mode
-         'line_rel'          : True,}                 # Release particles in line
+         'test'              : False,                  # Activate test mode
+         'line_rel'          : False,}                 # Release particles in line
 
 # DIRECTORIES
 dirs = {'script': os.path.dirname(os.path.realpath(__file__)),
         'model': os.path.dirname(os.path.realpath(__file__)) + '/MODEL_DATA/',
         'grid': os.path.dirname(os.path.realpath(__file__)) + '/GRID_DATA/',
         'plastic': os.path.dirname(os.path.realpath(__file__)) + '/PLASTIC_DATA/',
+        'fig': os.path.dirname(os.path.realpath(__file__)) + '/FIGURES/',
         'traj': os.path.dirname(os.path.realpath(__file__)) + '/TRAJ/'}
 
 # FILE HANDLES
 fh = {'ocean':   sorted(glob(dirs['model'] + 'OCEAN_*.nc')),
       'wave':    sorted(glob(dirs['model'] + 'WAVE_*.nc')),
       'grid':    dirs['grid'] + 'griddata.nc',
-      'traj':    dirs['traj'] + param['fn_out'],
-      'sid':     dirs['traj'] + 'sid.nc'}
+      'clist':   dirs['plastic'] + 'country_list.in',
+      'fig':     dirs['fig'] + 'plastic_input',
+      'traj':    dirs['traj'] + param['fn_out'],}
 
 # MODIFICATION TO PREVENT CRASHING IF END_YR=1993
 if param['Yend'] <= 1993:
@@ -140,21 +144,25 @@ particles = {'time_array' : mdm.release_time(param, mode=param['mode'])}
 
 # Calculate the locations, ids, procs for particle releases
 if not param['test']:
+    param['iso_list'] = np.loadtxt(fh['clist'],
+                                   delimiter=',',
+                                   usecols=0,
+                                   skiprows=1)
     particles['loc_array'] = mdm.release_loc(param, fh)
 else:
     if param['line_rel']:
         particles['loc_array'] = {}
-        particles['loc_array']['lon0'] = 46.65
-        particles['loc_array']['lon1'] = 46.65
-        particles['loc_array']['lat0'] = -10.0
-        particles['loc_array']['lat1'] = -9.0
+        particles['loc_array']['lon0'] = 56.25
+        particles['loc_array']['lon1'] = 56.25
+        particles['loc_array']['lat0'] = -4.7
+        particles['loc_array']['lat1'] = -3.7
 
         particles['loc_array']['ll'] = [np.linspace(particles['loc_array']['lon0'],
                                                     particles['loc_array']['lon1'],
-                                                    num=20),
+                                                    num=200),
                                         np.linspace(particles['loc_array']['lat0'],
                                                     particles['loc_array']['lat1'],
-                                                    num=20),]
+                                                    num=200),]
 
 
         particles['loc_array']['lon'] = particles['loc_array']['ll'][0].flatten()
@@ -182,8 +190,8 @@ variables = {'U': 'uo',
 dimensions = {'U': {'lon': 'longitude', 'lat': 'latitude', 'time': 'time'},
               'V': {'lon': 'longitude', 'lat': 'latitude', 'time': 'time'}}
 
-interp_method = {'U' : 'freeslip',
-                 'V' : 'freeslip'}
+interp_method = {'U' : 'linear',
+                 'V' : 'linear'}
 
 fieldset_ocean = FieldSet.from_netcdf(filenames, variables, dimensions,
                                       interp_method=interp_method)
@@ -195,11 +203,11 @@ if param['stokes']:
     variables = {'U': 'VSDX',
                  'V': 'VSDY'}
 
-    dimensions = {'U': {'lon': 'lon_rho', 'lat': 'lat_rho', 'time': 'time'},
-                  'V': {'lon': 'lon_rho', 'lat': 'lat_rho', 'time': 'time'}}
+    dimensions = {'U': {'lon': 'longitude', 'lat': 'latitude', 'time': 'time'},
+                  'V': {'lon': 'longitude', 'lat': 'latitude', 'time': 'time'}}
 
-    interp_method = {'U' : 'freeslip',
-                     'V' : 'freeslip'}
+    interp_method = {'U' : 'linear',
+                     'V' : 'linear'}
 
     fieldset_wave = FieldSet.from_netcdf(filenames, variables, dimensions,
                                          interp_method=interp_method)
@@ -278,7 +286,7 @@ fieldset.add_periodic_halo(zonal=True)
 
 # ADD MAXIMUM PARTICLE AGE (IF LIMITED AGE)
 if param['max_age']:
-    fieldset.add_constant('max_age', param['max_age']*3600*24*365.25)
+    fieldset.add_constant('max_age', param['max_age']*3600*24)#*365.25)
 
 
 ##############################################################################
@@ -299,7 +307,7 @@ class debris(JITParticle):
 
     # Sink ID of current cell (>0 if in specific sink cell)
     sink_id = Variable('sink_id',
-                   dtype=np.int32,
+                   dtype=np.int16,
                    initial=0,
                    to_write=True)
 
@@ -313,13 +321,13 @@ class debris(JITParticle):
     ot  = Variable('ot',
                    dtype=np.int32,
                    initial=0,
-                   to_write=False)
+                   to_write=True)
 
     # Time at coast (Time time spent in coastal cells)
     ct = Variable('ct',
                   dtype=np.int32,
                   initial=0,
-                  to_write=False)
+                  to_write=True)
 
     ##########################################################################
     # ANTIBEACHING VARIABLES #################################################
@@ -351,25 +359,25 @@ class debris(JITParticle):
     actual_sink_status = Variable('actual_sink_status',
                                   dtype=np.int32,
                                   initial=0,
-                                  to_write=False)
+                                  to_write=True)
 
     # Sink status (memory of ID of current sink cell)
     actual_sink_id = Variable('actual_sink_id',
-                              dtype=np.int16,
+                              dtype=np.int32,
                               initial=0,
-                              to_write=False)
+                              to_write=True)
 
     # Sink t0 (memory of time when current sink cell was reached - in time-steps)
     actual_sink_t0 = Variable('actual_sink_t0',
-                              dtype=np.int16,
+                              dtype=np.int32,
                               initial=0,
-                              to_write=False)
+                              to_write=True)
 
     # Sink ct (memory of time spent in coastal cells when arriving at current sink cell - in time-steps)
     actual_sink_ct = Variable('actual_sink_ct',
                               dtype=np.int32,
                               initial=0,
-                              to_write=False)
+                              to_write=True)
 
     ##########################################################################
     # RECORD OF ALL EVENTS ###################################################
@@ -476,72 +484,53 @@ def testing_mass(particle, fieldset, time):
     # Testing kernel to ensure that post-run calculations for mass fluxes are correct
     ls = 3.17e-9 # sinking
     lb = 5.79e-7 # beaching
+    ll = ls + lb
 
     # Subtract mass due to losses from sinking
-    particle.mass -= particle.mass*particle.dt*ls
+    # particle.mass -= particle.mass*particle.dt*ls
 
     # Subtract mass due to losses from beaching
     if particle.sink_id > 0:
         if particle.e_num == 0:
-            particle.m0 += particle.mass*particle.dt*lb
-            particle.mass -= particle.mass*particle.dt*lb
+            particle.m0 += particle.mass*particle.dt*ll
+            particle.mass -= particle.mass*particle.dt*ll
         elif particle.e_num == 1:
-            particle.m1 += particle.mass*particle.dt*lb
-            particle.mass -= particle.mass*particle.dt*lb
+            particle.m1 += particle.mass*particle.dt*ll
+            particle.mass -= particle.mass*particle.dt*ll
         elif particle.e_num == 2:
-            particle.m2 += particle.mass*particle.dt*lb
-            particle.mass -= particle.mass*particle.dt*lb
+            particle.m2 += particle.mass*particle.dt*ll
+            particle.mass -= particle.mass*particle.dt*ll
         elif particle.e_num == 3:
-            particle.m3 += particle.mass*particle.dt*lb
-            particle.mass -= particle.mass*particle.dt*lb
+            particle.m3 += particle.mass*particle.dt*ll
+            particle.mass -= particle.mass*particle.dt*ll
         elif particle.e_num == 4:
-            particle.m4 += particle.mass*particle.dt*lb
-            particle.mass -= particle.mass*particle.dt*lb
+            particle.m4 += particle.mass*particle.dt*ll
+            particle.mass -= particle.mass*particle.dt*ll
     elif particle.iso > 0:
-        particle.mass -= particle.mass*particle.dt*lb
-
-    # if particle.sink_id > 0:
-    #     if particle.e_num == 0:
-    #         particle.m0 += particle.mass*(1/100)
-    #         particle.mass -= particle.mass*(1/100)
-    #     elif particle.e_num == 1:
-    #         particle.m1 += particle.mass*(1/100)
-    #         particle.mass -= particle.mass*(1/100)
-    #     elif particle.e_num == 2:
-    #         particle.m2 += particle.mass*(1/100)
-    #         particle.mass -= particle.mass*(1/100)
-    #     elif particle.e_num == 3:
-    #         particle.m3 += particle.mass*(1/100)
-    #         particle.mass -= particle.mass*(1/100)
-    #     elif particle.e_num == 4:
-    #         particle.m4 += particle.mass*(1/100)
-    #         particle.mass -= particle.mass*(1/100)
-    # elif particle.iso > 0:
-    #     particle.mass -= particle.mass*(1/100)
+        particle.mass -= particle.mass*particle.dt*ll
 
 
-def time_at_coast(particle, fieldset, time):
-    # Keep track of the amount of time spent within a coastal cell
-    particle.iso = fieldset.iso_psi[particle]
+# Controller for managing particle events
+def event(particle, fieldset, time):
 
-    # ct is updated whenever the particle is in any coastal cell
-    if particle.iso > 0:
-        particle.ct += particle.dt
-
-
-def time_at_sea(particle, fieldset, time):
-    # Keep track of the amount of time spent at sea
+    # 1 Keep track of the amount of time spent at sea
     particle.ot += particle.dt
 
-    # Delete particle if the maximum age is exceeded
-    if particle.ot > fieldset.max_age:
-        particle.delete()
+    # 2 Assess coastal status
+    particle.iso = fieldset.iso_psi[particle]
 
+    if particle.iso > 0:
 
-def event(particle, fieldset, time):
-    # Controller for managing particle events
-    particle.sink_id = fieldset.sink_id_psi[particle]
+        # If in coastal cell, keep track of time spent in coastal cell
+        particle.ct += particle.dt
 
+        # Only need to check sink_id if we know we are in a coastal cell
+        particle.sink_id = fieldset.sink_id_psi[particle]
+
+    else:
+        particle.sink_id = 0
+
+    # 3 Manage particle event if relevant
     save_event = False
     new_event = False
 
@@ -555,7 +544,7 @@ def event(particle, fieldset, time):
             if particle.sink_id == particle.actual_sink_id:
 
                 # If contiguous event, just add time
-                particle.actual_sink_status += particle.dt
+                particle.actual_sink_status += 1
 
                 # But also check that the particle isn't about to expire (save if so)
                 # Otherwise particles hanging around coastal regions forever won't get saved
@@ -586,33 +575,33 @@ def event(particle, fieldset, time):
         # required a horrendous if-else chain
 
         if particle.e_num == 0:
-            particle.e0 += (particle.actual_sink_t0/particle.dt)
-            particle.e0 += (particle.actual_sink_ct/particle.dt)*2**20
-            particle.e0 += (particle.actual_sink_status/particle.dt)*2**40
+            particle.e0 += (particle.actual_sink_t0)
+            particle.e0 += (particle.actual_sink_ct)*2**20
+            particle.e0 += (particle.actual_sink_status)*2**40
             particle.e0 += (particle.actual_sink_id)*2**52
 
         elif particle.e_num == 1:
-            particle.e1 += (particle.actual_sink_t0/particle.dt)
-            particle.e1 += (particle.actual_sink_ct/particle.dt)*2**20
-            particle.e1 += (particle.actual_sink_status/particle.dt)*2**40
+            particle.e1 += (particle.actual_sink_t0)
+            particle.e1 += (particle.actual_sink_ct)*2**20
+            particle.e1 += (particle.actual_sink_status)*2**40
             particle.e1 += (particle.actual_sink_id)*2**52
 
         elif particle.e_num == 2:
-            particle.e2 += (particle.actual_sink_t0/particle.dt)
-            particle.e2 += (particle.actual_sink_ct/particle.dt)*2**20
-            particle.e2 += (particle.actual_sink_status/particle.dt)*2**40
+            particle.e2 += (particle.actual_sink_t0)
+            particle.e2 += (particle.actual_sink_ct)*2**20
+            particle.e2 += (particle.actual_sink_status)*2**40
             particle.e2 += (particle.actual_sink_id)*2**52
 
         elif particle.e_num == 3:
-            particle.e3 += (particle.actual_sink_t0/particle.dt)
-            particle.e3 += (particle.actual_sink_ct/particle.dt)*2**20
-            particle.e3 += (particle.actual_sink_status/particle.dt)*2**40
+            particle.e3 += (particle.actual_sink_t0)
+            particle.e3 += (particle.actual_sink_ct)*2**20
+            particle.e3 += (particle.actual_sink_status)*2**40
             particle.e3 += (particle.actual_sink_id)*2**52
 
         elif particle.e_num == 4:
-            particle.e4 += (particle.actual_sink_t0/particle.dt)
-            particle.e4 += (particle.actual_sink_ct/particle.dt)*2**20
-            particle.e4 += (particle.actual_sink_status/particle.dt)*2**40
+            particle.e4 += (particle.actual_sink_t0)
+            particle.e4 += (particle.actual_sink_ct)*2**20
+            particle.e4 += (particle.actual_sink_status)*2**40
             particle.e4 += (particle.actual_sink_id)*2**52
 
             particle.delete() # Delete particle, since no more sinks can be saved
@@ -630,32 +619,39 @@ def event(particle, fieldset, time):
         particle.e_num += 1
 
     if new_event:
-        # Add status to actual values
-        particle.actual_sink_status += particle.dt
-        particle.actual_sink_t0 = particle.ot
-        particle.actual_sink_ct = particle.ct
+        # Add status to actual (for current event) values
+        # Timesteps at current sink
+        particle.actual_sink_status = 1
+
+        # Timesteps spent in the ocean overall (minus one, before this step)
+        particle.actual_sink_t0 = (particle.ot/particle.dt) - 1
+
+        # Timesteps spent in the coast overall (minus one, before this step)
+        particle.actual_sink_ct = (particle.ct/particle.dt) - 1
+
+        # ID of current sink
         particle.actual_sink_id = particle.sink_id
-
-
-def deleteParticle(particle, fieldset, time):
-    #  Recovery kernel to delete a particle if an error occurs
-    particle.delete()
 
 
 def antibeach(particle, fieldset, time):
     #  Kernel to repel particles from the coast
     particle.cd = fieldset.cdist_rho[particle]
 
-    if particle.cd < 0.2:
+    if particle.cd < 0.5:
 
         particle.uc = fieldset.cnormx_rho[particle]
         particle.vc = fieldset.cnormy_rho[particle]
 
-        particle.uc *= 5*(particle.cd - 0.2)**2
-        particle.vc *= 5*(particle.cd - 0.2)**2
+        if particle.cd < 0.1:
+            particle.uc *= -1*(particle.cd - 0.5)**2 -75*(particle.cd - 0.1)**2
+            particle.vc *= -1*(particle.cd - 0.5)**2 -75*(particle.cd - 0.1)**2
+        else:
+            particle.uc *= -1*(particle.cd - 0.5)**2
+            particle.vc *= -1*(particle.cd - 0.5)**2
 
         particle.lon += particle.uc*particle.dt
         particle.lat += particle.vc*particle.dt
+
 
 
 def periodicBC(particle, fieldset, time):
@@ -664,6 +660,17 @@ def periodicBC(particle, fieldset, time):
         particle.lon += fieldset.halo_east - fieldset.halo_west
     elif particle.lon > fieldset.halo_east:
         particle.lon -= fieldset.halo_east - fieldset.halo_west
+
+
+def deleteParticle(particle, fieldset, time):
+    #  Recovery kernel to delete a particle if an error occurs
+    particle.delete()
+
+
+def time_at_sea(particle, fieldset, time):
+    # Delete particle if the maximum age is exceeded
+    if particle.ot > fieldset.max_age:
+        particle.delete()
 
 ##############################################################################
 # INITIALISE SIMULATION AND RUN                                              #
@@ -678,12 +685,10 @@ pset = ParticleSet.from_list(fieldset=fieldset,
 
 print(str(len(particles['pos']['time'])) + ' particles released!')
 
-traj = pset.ParticleFile(name=fh['traj'],
-                         outputdt=param['dt_out'])
+traj = pset.ParticleFile(name=fh['traj'], write_ondelete=True)
 
 if param['max_age']:
     kernels = (pset.Kernel(AdvectionRK4) +
-               pset.Kernel(time_at_coast) +
                pset.Kernel(event) +
                pset.Kernel(testing_mass) +
                pset.Kernel(antibeach) +
@@ -691,7 +696,6 @@ if param['max_age']:
                pset.Kernel(periodicBC))
 else:
     kernels = (pset.Kernel(AdvectionRK4) +
-               pset.Kernel(time_at_coast) +
                pset.Kernel(event) +
                pset.Kernel(testing_mass) +
                pset.Kernel(antibeach) +
@@ -712,7 +716,7 @@ traj.export()
 
 if param['test']:
     # Set display region
-    (lon_min, lon_max, lat_min, lat_max) = (45.7, 46.7, -10.0, -9.0)
+    (lon_min, lon_max, lat_min, lat_max) = (54.5, 56.5, -5.5, -3.5)
 
     # Import grids
     with Dataset(fh['grid'], mode='r') as nc:
