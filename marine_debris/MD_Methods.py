@@ -236,10 +236,10 @@ def release_loc(param, fh):
     # only released at least 0.5 cells away from the land mask.
 
     ids = param['iso_list']
-    pn  = param['pn']
+    # pn  = param['pn']
 
     # Convert pn to the number along a square
-    pn = int(np.ceil(pn**0.5))
+    # pn = int(np.ceil(pn**0.5))
 
     # Firstly load the requisite fields:
     # - rho & psi coordinates
@@ -255,6 +255,7 @@ def release_loc(param, fh):
 
         id_psi    = np.array(nc.variables['source_id_psi'][:])
         iso_psi   = np.array(nc.variables['iso_psi'][:])
+        lsm_psi   = np.array(nc.variables['lsm_psi'][:])
         cp_psi    = np.array(nc.variables['cplastic_psi'][:])
         rp_psi    = np.array(nc.variables['rplastic_psi'][:])
 
@@ -265,25 +266,18 @@ def release_loc(param, fh):
     # Filtering
     lon_psi_grid, lat_psi_grid = np.meshgrid(lon_psi, lat_psi)
     # Remove Mediterannean coasts of Egypt
-    rmv_bnds = [np.searchsorted(lon_psi, 23), # W
-                np.searchsorted(lon_psi, 35), # E
-                np.searchsorted(lat_psi, 30)] # S
     cp_psi[(lon_psi_grid > 23)*
            (lon_psi_grid < 35)*
            (lat_psi_grid > 30)] = 0
-    rp_psi[(lon_psi_grid > rmv_bnds[0])*
-           (lon_psi_grid < rmv_bnds[1])*
-           (lat_psi_grid > rmv_bnds[2])] = 0
+    rp_psi[(lon_psi_grid > 23)*
+           (lon_psi_grid < 35)*
+           (lat_psi_grid > 30)] = 0
 
     # Remove everything below 60S
-    rmv_bnds = [np.searchsorted(lat_psi, -60)] # S
     cp_psi[(lat_psi_grid < -60)] = 0
     rp_psi[(lat_psi_grid < -60)] = 0
 
     # Remove northern part of Brazil
-    rmv_bnds = [np.searchsorted(lon_psi, -55), # W
-                np.searchsorted(lon_psi, -30), # E
-                np.searchsorted(lat_psi, -10)] # S
     cp_psi[(lon_psi_grid > -55)*
            (lon_psi_grid < -30)*
            (lat_psi_grid > -10)] = 0
@@ -291,18 +285,23 @@ def release_loc(param, fh):
            (lon_psi_grid < -30)*
            (lat_psi_grid > -10)] = 0
 
-    # Extract cell grid indices
-    idx = list(np.where(np.isin(iso_psi, ids)))
+    # Now distribute plastic flux per grid cell across particles
+    # Apply plastic threshold
+    print('')
+    print('Total cells with plastic: ' + str(np.count_nonzero(cp_psi + rp_psi)))
 
+    tot_cp = np.sum(cp_psi)
+    tot_rp = np.sum(rp_psi)
+
+    cp_psi[cp_psi + rp_psi < param['threshold']] = 0
+    rp_psi[cp_psi + rp_psi < param['threshold']] = 0
+
+    print('Cells remaining after threshold: ' + str(np.count_nonzero(cp_psi + rp_psi)))
+    print('Riverine plastic remaining after threshold: ' + str(100*np.sum(rp_psi)/tot_rp) + '%')
+    print('Direct coastal plastic remaining after threshold: ' + str(100*np.sum(cp_psi)/tot_cp) + '%')
 
     if param['plot_input']:
-        # Create lat/lon/mass arrays
-        # coast_cell_lon = lon_psi[idx[1]]
-        # coast_cell_lat = lat_psi[idx[0]]
-        # coast_cell_cp = cp_psi[idx]
-        # coast_cell_rp = rp_psi[idx]
-
-        # Prepare the fields for plotting. We need:
+         # Prepare the fields for plotting. We need:
         # (1) Mask for coasts
         # (2) Cells within certain distance of coast
         # (3) Fill with nearest plastic value
@@ -313,13 +312,16 @@ def release_loc(param, fh):
         rp_mask[rp_psi == 0] = 1
 
         # Cells within distance
-        vis_dist = 15
+        vis_dist = 10
         cp_mask2 = distance_transform_edt(cp_mask)
         cp_mask2[cp_mask2 > vis_dist] = 0
         cp_mask2[cp_mask2 > 0] = 1
+        cp_mask2[cp_psi > 0] = 1
+
         rp_mask2 = distance_transform_edt(rp_mask)
         rp_mask2[rp_mask2 > vis_dist] = 0
         rp_mask2[rp_mask2 > 0] = 1
+        rp_mask2[rp_psi > 0] = 1
 
         # Now fill with nearest value
         cp_psi = np.ma.masked_where(cp_psi == 0, cp_psi)
@@ -353,40 +355,53 @@ def release_loc(param, fh):
             f, ax = plt.subplots(1, 1, figsize=(20, 10),
                                  subplot_kw={'projection': ccrs.PlateCarree()})
             f.subplots_adjust(hspace=0, wspace=0, top=0.925, left=0.1)
-            ax.set_xlim([-80, 180])
-            ax.set_ylim([-60, 50])
+            ax.set_xlim([-90, 180])
+            ax.set_ylim([-65, 65])
 
             # Plot the locations
-            # order = np.argsort(coast_cell_cp)
-
-            cmap = cmr.pepper_r
+            cmap = cmr.gem_r
             cp_pcolor = ax.pcolormesh(lon_psi, lat_psi, plastic_data[i], cmap=cmap,
-                                      norm=colors.LogNorm(vmin=1e1, vmax=1e6),
-                                      transform=ccrs.PlateCarree())
+                                      norm=colors.LogNorm(vmin=param['threshold'], vmax=1e6),
+                                      transform=ccrs.PlateCarree(), zorder=2)
+
+            # Add land
+            ax.pcolormesh(lon_psi, lat_psi,
+                          np.ma.masked_where(lsm_psi == 0, lsm_psi),
+                          cmap=cmr.neutral_r, vmin=0, vmax=2,
+                          transform=ccrs.PlateCarree(), zorder=3)
+            ax.axis('off')
 
             # Add cartographic features
             gl = ax.gridlines(crs=ccrs.PlateCarree(), draw_labels=True,
-                              linewidth=1, color='black', linestyle='-', zorder=11)
+                              linewidth=0.8, color='black', linestyle='--', zorder=11)
             gl.xlocator = mticker.FixedLocator(np.arange(-90, 210, 30))
+            gl.ylocator = mticker.FixedLocator(np.arange(-90, 120, 30))
             gl.xlabels_top = False
             gl.ylabels_right = False
 
-            land_10m = cfeature.NaturalEarthFeature('physical', 'land', '10m',
-                                                    edgecolor='black',
-                                                    facecolor='black', zorder=6)
-            ax.add_feature(land_10m)
-
-            cax = f.add_axes([ax.get_position().x1+0.01,ax.get_position().y0-0.06,0.015,ax.get_position().height+0.12])
+            cax = f.add_axes([ax.get_position().x1+0.01,ax.get_position().y0-0.015,0.015,ax.get_position().height+0.03])
 
             cb = plt.colorbar(cp_pcolor, cax=cax, pad=0.1)
-            cb.set_label('Estimated annual' + plastic_name[i] + 'plastic flux to ocean (kg)', size=12)
+            cb.set_label('Estimated' + plastic_name[i] + 'plastic flux to ocean (kg/yr)', size=12)
             ax.set_aspect('auto', adjustable=None)
             ax.margins(x=-0.01, y=-0.01)
             plt.savefig(fh['fig'] + plastic_fh[i], dpi=300)
             plt.close()
 
+    # Extract cell grid indices
+    p_psi = cp_psi + rp_psi
+    idx = list(np.where(p_psi > 0))
 
-    print()
+    # Calculate the total number of particles
+    nl  = idx[0].shape[0]  # Number of locations
+    p_psi_list = cp_psi[tuple(idx)] + rp_psi[tuple(idx)]
+    pn_list = np.array(np.ceil(param['log_mult']*np.log10(p_psi_list)), dtype=np.int)
+    pn_list_cs = np.cumsum(pn_list**2)
+    pn_list_cs = np.concatenate((np.array([0]), pn_list_cs))
+    pn_tot = pn_list_cs[-1]
+
+    print('')
+    print('Total number of particles generated per relase: ' + str(pn_tot))
 
     # For cell psi[i, j], the surrounding rho cells are:
     # rho[i, j]     (SW)
@@ -400,47 +415,56 @@ def release_loc(param, fh):
     # 3. Calculate the valid part of that psi cell to populate
     # 4. Calculate the coordinates of the resulting particles
 
-    # Firstly calculate the basic particle grid
     dX = lon_rho[1] - lon_rho[0]  # Grid spacing
-    dx = dX/pn                    # Particle spacing
-    gx = gy = np.linspace((-dX/2 + dx/2), (dX/2 - dx/2), num=pn)
-    gridx, gridy = [grid.flatten() for grid in np.meshgrid(gx, gy)]
 
-    nl  = idx[0].shape[0]  # Number of locations
-
-    lon_out = np.array([], dtype=np.float64)
-    lat_out = np.array([], dtype=np.float64)
-    id_out  = np.array([], dtype=np.int32)
-    iso_out  = np.array([], dtype=np.int16)
+    lon_out = np.zeros((pn_tot,), dtype=np.float64)
+    lat_out = np.zeros((pn_tot,), dtype=np.float64)
+    cp0_out = np.zeros((pn_tot,), dtype=np.float32)
+    rp0_out = np.zeros((pn_tot,), dtype=np.float32)
+    id_out = np.zeros((pn_tot,), dtype=np.int32)
+    iso_out = np.zeros((pn_tot,), dtype=np.int16)
 
     for loc in range(nl):
+        # Find cell location
         loc_yidx = idx[0][loc]
         loc_xidx = idx[1][loc]
+
+        # Calculate initial plastic and particle number required
+        cp_cell = cp_psi[loc_yidx, loc_xidx]
+        rp_cell = rp_psi[loc_yidx, loc_xidx]
+
+        pn_cell = int(np.ceil(param['log_mult']*np.log10(cp_cell + rp_cell)))
+
+        cp_part = cp_cell/pn_cell**2
+        rp_part = rp_cell/pn_cell**2
+
+        # Calculate initial positions
+        dx = dX/pn_cell                    # Particle spacing
+        gx = np.linspace((-dX/2 + dx/2), (dX/2 - dx/2), num=pn_cell)
+        gridx, gridy = [grid.flatten() for grid in np.meshgrid(gx, gx)]
 
         loc_y = lat_psi[loc_yidx]
         loc_x = lon_psi[loc_xidx]
 
-        loc_id   = id_psi[loc_yidx, loc_xidx]
-        loc_iso  = iso_psi[loc_yidx, loc_xidx]
+        loc_id = id_psi[loc_yidx, loc_xidx]
+        loc_iso = iso_psi[loc_yidx, loc_xidx]
 
-        lon_out = np.append(lon_out, gridx + loc_x)
-        lat_out = np.append(lat_out, gridy + loc_y)
-        iso_out = np.append(iso_out, np.ones(np.shape(gridx),
-                                             dtype=np.int16)*loc_iso)
-        id_out = np.append(id_out, np.ones(np.shape(gridx),
-                                           dtype=np.int32)*loc_id)
+        s_idx = pn_list_cs[loc]
+        e_idx = pn_list_cs[loc+1]
 
-    # Now distribute trajectories across processes
-    # proc_out = np.repeat(np.arange(param['nproc'],
-    #                                dtype=(np.int16 if param['nproc'] > 123 else np.int8)),
-    #                      int(np.ceil(len(id_out)/param['nproc'])))
-    # proc_out = proc_out[:len(id_out)]
-
+        lon_out[s_idx:e_idx] = gridx + loc_x
+        lat_out[s_idx:e_idx] = gridy + loc_y
+        cp0_out[s_idx:e_idx] = np.ones(np.shape(gridx), dtype=np.float32)*cp_part
+        rp0_out[s_idx:e_idx] = np.ones(np.shape(gridx), dtype=np.float32)*rp_part
+        iso_out[s_idx:e_idx] = np.ones(np.shape(gridx), dtype=np.int16)*loc_iso
+        id_out[s_idx:e_idx] = np.ones(np.shape(gridx), dtype=np.int32)*loc_id
 
     pos0 = {'lon': lon_out,
             'lat': lat_out,
             'iso': iso_out,
-            'id': id_out}
+            'id': id_out,
+            'cp0': cp0_out,
+            'rp0': rp0_out}
 
     return pos0
 
@@ -458,6 +482,8 @@ def add_times(particles, param):
     data['lat']  = np.tile(data['lat'], ntimes)
     data['iso']  = np.tile(data['iso'], ntimes)
     data['id']   = np.tile(data['id'], ntimes)
+    data['cp0']   = np.tile(data['cp0'], ntimes)
+    data['rp0']   = np.tile(data['rp0'], ntimes)
     data['time'] = np.repeat(times, npart)
 
     # Also now calculation partitioning of particles
@@ -470,6 +496,8 @@ def add_times(particles, param):
         data['lat'] = data['lat'][i0:i1]
         data['iso'] = data['iso'][i0:i1]
         data['id'] = data['id'][i0:i1]
+        data['cp0'] = data['cp0'][i0:i1]
+        data['rp0'] = data['rp0'][i0:i1]
         data['time'] = data['time'][i0:i1]
 
     return data

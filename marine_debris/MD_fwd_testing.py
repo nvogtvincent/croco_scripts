@@ -45,10 +45,11 @@ param = {# Release timing
          'Mmin'              : 9   ,          # First release month
          'Mmax'              : 9  ,           # Last release month
          'mode'              :'START',        # Release at END or START
-
-         # Release locations
-         'pn'                : 128,          # Particles to release per cell
          'RPM'               : 1,             # Releases per month
+
+         # Seeding strategy
+         'threshold'         : 1e3,           # Minimum plastic threshold (kg)
+         'log_mult'          : 1,             # Log-multiplier
 
          # Sink locations
          'id'                : [690],         # ISO IDs of sink countries
@@ -57,12 +58,12 @@ param = {# Release timing
          'stokes'            : True,          # Toggle to use Stokes drift
          'windage'           : False,         # Toggle to use windage
          'fw'                : 0.0,           # Windage fraction
-         'max_age'           : 10,            # Max age (years). 0 == inf.
+         'max_age'           : 1.9,            # Max age (years). 0 == inf.
 
          # Runtime parameters
          'Yend'              : y_in,                 # Last year of simulation
          'Mend'              : 9   ,                    # Last month
-         'Dend'              : 2   ,                    # Last day (00:00, start)
+         'Dend'              : 3   ,                    # Last day (00:00, start)
          'dt_RK4'            : timedelta(minutes=30),  # RK4 time-step
 
          # Output parameters
@@ -73,13 +74,15 @@ param = {# Release timing
          'total_partitions'  : tot_part,
          'partition'         : part,
 
-         # Other parameters
+         # Plastic parameters
          'plastic'           : True,                   # Write plastic source data
          'add_sey'           : True,                   # Add extra Sey islands
+         'plot_input'        : False,                  # Plot plastic input
+
          'p_param'           : {'l'  : 25.,            # Plastic length scale
                                 'cr' : 0.25},          # Fraction entering sea
-         'plot_input'        : True,                   # Plot plastic input
 
+         # Testing parameters
          'test'              : False,                  # Activate test mode
          'line_rel'          : False,}                 # Release particles in line
 
@@ -311,12 +314,6 @@ class debris(JITParticle):
                    initial=0,
                    to_write=True)
 
-    # Source cell ID (specifically identifying source cell)
-    source_id = Variable('source_id',
-                         dtype=np.int32,
-                         initial=fieldset.source_id_psi,
-                         to_write='once')
-
     # Time at sea (Total time since release)
     ot  = Variable('ot',
                    dtype=np.int32,
@@ -328,6 +325,28 @@ class debris(JITParticle):
                   dtype=np.int32,
                   initial=0,
                   to_write=True)
+
+    ##########################################################################
+    # PROVENANCE IDENTIFIERS #################################################
+    ##########################################################################
+
+    # Source cell ID (specifically identifying source cell)
+    source_id = Variable('source_id',
+                         dtype=np.float32,
+                         #initial=0,#fieldset.source_id_psi,
+                         to_write='once')
+
+    # Source cell ID (Initial mass of plastic from direct coastal input)
+    cp0 = Variable('cp0',
+                   dtype=np.float32,
+                   #initial=0,#fieldset.source_id_psi,
+                   to_write='once')
+
+    # Source cell ID (Initial mass of plastic from riverine input)
+    rp0 = Variable('rp0',
+                   dtype=np.float32,
+                   #initial=0,#fieldset.source_id_psi,
+                   to_write='once')
 
     ##########################################################################
     # ANTIBEACHING VARIABLES #################################################
@@ -681,7 +700,9 @@ pset = ParticleSet.from_list(fieldset=fieldset,
                              lonlatdepth_dtype=np.float64,
                              lon  = particles['pos']['lon'],
                              lat  = particles['pos']['lat'],
-                             time = particles['pos']['time'])
+                             time = particles['pos']['time'],
+                             rp0  = particles['pos']['rp0'],
+                             cp0  = particles['pos']['cp0'])
 
 print(str(len(particles['pos']['time'])) + ' particles released!')
 
