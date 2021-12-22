@@ -18,6 +18,7 @@ from matplotlib import colors
 from netCDF4 import Dataset
 from calendar import monthrange
 from scipy.ndimage import distance_transform_edt
+from scipy.interpolate import griddata
 from skimage.measure import block_reduce
 from datetime import datetime
 from osgeo import gdal
@@ -258,42 +259,94 @@ def release_loc(param, fh):
         rp_psi    = np.array(nc.variables['rplastic_psi'][:])
 
     # Now find the cells matching the provided ISO codes
-    idx = list(np.where(np.isin(iso_psi, ids)))
+    cp_psi[~np.isin(iso_psi, ids)] = 0
+    rp_psi[~np.isin(iso_psi, ids)] = 0
 
     # Filtering
+    lon_psi_grid, lat_psi_grid = np.meshgrid(lon_psi, lat_psi)
     # Remove Mediterannean coasts of Egypt
     rmv_bnds = [np.searchsorted(lon_psi, 23), # W
                 np.searchsorted(lon_psi, 35), # E
                 np.searchsorted(lat_psi, 30)] # S
-    rmv_where = np.where((idx[1] > rmv_bnds[0])*(idx[1] < rmv_bnds[1])*(idx[0] > rmv_bnds[2]) == 1)[0]
+    cp_psi[(lon_psi_grid > 23)*
+           (lon_psi_grid < 35)*
+           (lat_psi_grid > 30)] = 0
+    rp_psi[(lon_psi_grid > rmv_bnds[0])*
+           (lon_psi_grid < rmv_bnds[1])*
+           (lat_psi_grid > rmv_bnds[2])] = 0
 
     # Remove everything below 60S
     rmv_bnds = [np.searchsorted(lat_psi, -60)] # S
-    rmv_where = np.concatenate((rmv_where,
-                               (np.where((idx[0] < rmv_bnds[0]) == 1))[0]))
+    cp_psi[(lat_psi_grid < -60)] = 0
+    rp_psi[(lat_psi_grid < -60)] = 0
 
     # Remove northern part of Brazil
     rmv_bnds = [np.searchsorted(lon_psi, -55), # W
                 np.searchsorted(lon_psi, -30), # E
                 np.searchsorted(lat_psi, -10)] # S
-    rmv_where = np.concatenate((rmv_where,
-                               (np.where((idx[1] > rmv_bnds[0])*(idx[1] < rmv_bnds[1])*(idx[0] > rmv_bnds[2]) == 1)[0])))
+    cp_psi[(lon_psi_grid > -55)*
+           (lon_psi_grid < -30)*
+           (lat_psi_grid > -10)] = 0
+    rp_psi[(lon_psi_grid > -55)*
+           (lon_psi_grid < -30)*
+           (lat_psi_grid > -10)] = 0
 
-    # Remove
-    idx[0] = np.delete(idx[0], rmv_where)
-    idx[1] = np.delete(idx[1], rmv_where)
+    # Extract cell grid indices
+    idx = list(np.where(np.isin(iso_psi, ids)))
 
 
     if param['plot_input']:
         # Create lat/lon/mass arrays
-        coast_cell_lon = lon_psi[idx[1]]
-        coast_cell_lat = lat_psi[idx[0]]
-        coast_cell_cp = cp_psi[idx]
-        coast_cell_rp = rp_psi[idx]
+        # coast_cell_lon = lon_psi[idx[1]]
+        # coast_cell_lat = lat_psi[idx[0]]
+        # coast_cell_cp = cp_psi[idx]
+        # coast_cell_rp = rp_psi[idx]
+
+        # Prepare the fields for plotting. We need:
+        # (1) Mask for coasts
+        # (2) Cells within certain distance of coast
+        # (3) Fill with nearest plastic value
+
+        # Masks
+        cp_mask, rp_mask = np.zeros_like(cp_psi), np.zeros_like(rp_psi)
+        cp_mask[cp_psi == 0] = 1
+        rp_mask[rp_psi == 0] = 1
+
+        # Cells within distance
+        vis_dist = 15
+        cp_mask2 = distance_transform_edt(cp_mask)
+        cp_mask2[cp_mask2 > vis_dist] = 0
+        cp_mask2[cp_mask2 > 0] = 1
+        rp_mask2 = distance_transform_edt(rp_mask)
+        rp_mask2[rp_mask2 > vis_dist] = 0
+        rp_mask2[rp_mask2 > 0] = 1
+
+        # Now fill with nearest value
+        cp_psi = np.ma.masked_where(cp_psi == 0, cp_psi)
+        lon_psi_grid_c = np.ma.masked_where(np.ma.getmask(cp_psi), lon_psi_grid)
+        lat_psi_grid_c = np.ma.masked_where(np.ma.getmask(cp_psi), lat_psi_grid)
+        cp_psi_list = cp_psi.compressed()
+        cp_lon_list = lon_psi_grid_c.compressed()
+        cp_lat_list = lat_psi_grid_c.compressed()
+
+        cp_points = np.concatenate((cp_lon_list, cp_lat_list)).reshape((2, -1)).T
+        cp_viz = griddata(cp_points, cp_psi_list, (lon_psi_grid, lat_psi_grid), method='nearest')
+        cp_viz *= cp_mask2
+
+        rp_psi = np.ma.masked_where(rp_psi == 0, rp_psi)
+        lon_psi_grid_r = np.ma.masked_where(np.ma.getmask(rp_psi), lon_psi_grid)
+        lat_psi_grid_r = np.ma.masked_where(np.ma.getmask(rp_psi), lat_psi_grid)
+        rp_psi_list = rp_psi.compressed()
+        rp_lon_list = lon_psi_grid_r.compressed()
+        rp_lat_list = lat_psi_grid_r.compressed()
+
+        rp_points = np.concatenate((rp_lon_list, rp_lat_list)).reshape((2, -1)).T
+        rp_viz = griddata(rp_points, rp_psi_list, (lon_psi_grid, lat_psi_grid), method='nearest')
+        rp_viz *= rp_mask2
 
         plastic_name = [' direct coastal ', ' riverine ']
         plastic_fh = ['_coasts.png', '_rivers.png']
-        plastic_data = [coast_cell_cp, coast_cell_rp]
+        plastic_data = [cp_viz, rp_viz]
 
         for i in range(2):
             # Plot coastal plastics
@@ -302,16 +355,14 @@ def release_loc(param, fh):
             f.subplots_adjust(hspace=0, wspace=0, top=0.925, left=0.1)
             ax.set_xlim([-80, 180])
             ax.set_ylim([-60, 50])
-            # ax.set_global()
 
             # Plot the locations
-            order = np.argsort(coast_cell_cp)
+            # order = np.argsort(coast_cell_cp)
 
             cmap = cmr.pepper_r
-            scatter = ax.scatter(coast_cell_lon[order], coast_cell_lat[order], c=plastic_data[i][order],
-                                 # s=2*np.log(coast_cell_cp[order]+1),
-                                 norm=colors.LogNorm(vmin=1e2, vmax=1e7), cmap=cmap,
-                                 transform=ccrs.PlateCarree(), s=100, zorder=5)
+            cp_pcolor = ax.pcolormesh(lon_psi, lat_psi, plastic_data[i], cmap=cmap,
+                                      norm=colors.LogNorm(vmin=1e1, vmax=1e6),
+                                      transform=ccrs.PlateCarree())
 
             # Add cartographic features
             gl = ax.gridlines(crs=ccrs.PlateCarree(), draw_labels=True,
@@ -325,17 +376,9 @@ def release_loc(param, fh):
                                                     facecolor='black', zorder=6)
             ax.add_feature(land_10m)
 
-            # Set up the colorbar
-            # axpos = ax.get_position()
-            # pos_x = axpos.x0+axpos.width + 0.03
-            # pos_y = axpos.y0
-            # cax_width = 0.015
-            # cax_height = axpos.height
-
-            # pos_cax = f.add_axes([pos_x, pos_y, cax_width, cax_height])
             cax = f.add_axes([ax.get_position().x1+0.01,ax.get_position().y0-0.06,0.015,ax.get_position().height+0.12])
 
-            cb = plt.colorbar(scatter, cax=cax, pad=0.1)
+            cb = plt.colorbar(cp_pcolor, cax=cax, pad=0.1)
             cb.set_label('Estimated annual' + plastic_name[i] + 'plastic flux to ocean (kg)', size=12)
             ax.set_aspect('auto', adjustable=None)
             ax.margins(x=-0.01, y=-0.01)
