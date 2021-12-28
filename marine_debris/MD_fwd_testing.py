@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 import cmocean.cm as cm
 from parcels import (Field, FieldSet, ParticleSet, JITParticle, AdvectionRK4,
                      ErrorCode, Geographic, GeographicPolar, Variable,
-                     ParcelsRandom)
+                     DiffusionUniformKh)
 from netCDF4 import Dataset, num2date
 from datetime import timedelta, datetime
 from glob import glob
@@ -23,20 +23,15 @@ from sys import argv
 # DIRECTORIES & PARAMETERS                                                   #
 ##############################################################################
 
-# START YEAR
-# y_in = int(argv[1])
-
-# # # PARTITIONS
-# try:
-#     tot_part = int(argv[2])
-#     part = int(argv[3])
-# except:
-#     tot_part = 1
-#     part = 0
-
-y_in = 2019
-tot_part = 1
-part = 0
+# PARTITIONS & STARTING YEAR
+try:
+    y_in = int(argv[1])
+    tot_part = int(argv[2])
+    part = int(argv[3])
+except:
+    y_in = 2019
+    tot_part = 1
+    part = 0
 
 # PARAMETERS
 param = {# Release timing
@@ -48,8 +43,8 @@ param = {# Release timing
          'RPM'               : 1,             # Releases per month
 
          # Seeding strategy
-         'threshold'         : 1e3,           # Minimum plastic threshold (kg)
-         'log_mult'          : 1,             # Log-multiplier
+         'threshold'         : 1e2,           # Minimum plastic threshold (kg)
+         'log_mult'          : 16.4,             # Log-multiplier
 
          # Sink locations
          'id'                : [690],         # ISO IDs of sink countries
@@ -58,16 +53,16 @@ param = {# Release timing
          'stokes'            : True,          # Toggle to use Stokes drift
          'windage'           : False,         # Toggle to use windage
          'fw'                : 0.0,           # Windage fraction
-         'max_age'           : 1.9,            # Max age (years). 0 == inf.
+         'Kh'                : 0.,            # Horizontal diffusion coefficient (m2/s, 0 = off)
+         'max_age'           : 0.049,           # Max age (years). 0 == inf.
 
          # Runtime parameters
-         'Yend'              : y_in,                 # Last year of simulation
-         'Mend'              : 9   ,                    # Last month
-         'Dend'              : 3   ,                    # Last day (00:00, start)
-         'dt_RK4'            : timedelta(minutes=30),  # RK4 time-step
+         'Yend'              : y_in,                   # Last year of simulation
+         'Mend'              : 9   ,                   # Last month
+         'Dend'              : 20   ,                  # Last day (00:00, start)
+         'dt_RK4'            : timedelta(minutes=45),  # RK4 time-step
 
          # Output parameters
-         'dt_out'            : timedelta(minutes=60),    # Output frequency
          'fn_out'            : str(y_in) + '_' + str(part) + '_Fwd.nc',  # Output filename
 
          # Partitioning
@@ -84,7 +79,8 @@ param = {# Release timing
 
          # Testing parameters
          'test'              : False,                  # Activate test mode
-         'line_rel'          : False,}                 # Release particles in line
+         'line_rel'          : False,                  # Release particles in line
+         'dt_out'            : timedelta(minutes=60),}# Output frequency (testing only)
 
 # DIRECTORIES
 dirs = {'script': os.path.dirname(os.path.realpath(__file__)),
@@ -107,6 +103,9 @@ if param['Yend'] <= 1993:
     param['Yend'] = 1993
     param['Mend'] = 1
     param['Dend'] = 2
+
+if param['max_age'] == 0:
+    param['max_age'] = 1e20
 
 ##############################################################################
 # SET UP PARTICLE RELEASES                                                   #
@@ -173,6 +172,8 @@ else:
 
         particles['loc_array']['iso'] = np.zeros_like(particles['loc_array']['lon'])
         particles['loc_array']['id'] = np.zeros_like(particles['loc_array']['lon'])
+        particles['loc_array']['cp0'] = np.zeros_like(particles['loc_array']['lon'])
+        particles['loc_array']['rp0'] = np.zeros_like(particles['loc_array']['lon'])
     else:
         particles['loc_array'] = mdm.release_loc(param, fh)
 
@@ -287,9 +288,13 @@ fieldset.add_constant('halo_west', -180.)
 fieldset.add_constant('halo_east', 180.)
 fieldset.add_periodic_halo(zonal=True)
 
+# ADD DIFFUSION
+if param['Kh']:
+    fieldset.add_constant_field('Kh_zonal', param['Kh'], mesh='spherical')
+    fieldset.add_constant_field('Kh_meridional', param['Kh'], mesh='spherical')
+
 # ADD MAXIMUM PARTICLE AGE (IF LIMITED AGE)
-if param['max_age']:
-    fieldset.add_constant('max_age', param['max_age']*3600*24)#*365.25)
+fieldset.add_constant('max_age', param['max_age']*3600*24*365)
 
 
 ##############################################################################
@@ -332,20 +337,17 @@ class debris(JITParticle):
 
     # Source cell ID (specifically identifying source cell)
     source_id = Variable('source_id',
-                         dtype=np.float32,
-                         #initial=0,#fieldset.source_id_psi,
+                         dtype=np.int32,
                          to_write='once')
 
     # Source cell ID (Initial mass of plastic from direct coastal input)
     cp0 = Variable('cp0',
                    dtype=np.float32,
-                   #initial=0,#fieldset.source_id_psi,
                    to_write='once')
 
     # Source cell ID (Initial mass of plastic from riverine input)
     rp0 = Variable('rp0',
                    dtype=np.float32,
-                   #initial=0,#fieldset.source_id_psi,
                    to_write='once')
 
     ##########################################################################
@@ -403,97 +405,38 @@ class debris(JITParticle):
     ##########################################################################
 
     # Number of events
-    e_num = Variable('e_num',
-                     dtype=np.int16,
-                     initial=0,
-                     to_write=True)
+    e_num = Variable('e_num', dtype=np.int16, initial=0, to_write=True)
 
-    # Event 0
-    e0 = Variable('e0',
-                  dtype=np.int64,
-                  initial=0,
-                  to_write=True)
-
-    # Event 0
-    e1 = Variable('e1',
-                  dtype=np.int64,
-                  initial=0,
-                  to_write=True)
-
-    # Event 0
-    e2 = Variable('e2',
-                  dtype=np.int64,
-                  initial=0,
-                  to_write=True)
-
-    # Event 0
-    e3 = Variable('e3',
-                  dtype=np.int64,
-                  initial=0,
-                  to_write=True)
-
-    # Event 0
-    e4 = Variable('e4',
-                  dtype=np.int64,
-                  initial=0,
-                  to_write=True)
+    # Events
+    e0 = Variable('e0', dtype=np.int64, initial=0, to_write=True)
+    e1 = Variable('e1', dtype=np.int64, initial=0, to_write=True)
+    e2 = Variable('e2', dtype=np.int64, initial=0, to_write=True)
+    e3 = Variable('e3', dtype=np.int64, initial=0, to_write=True)
+    e4 = Variable('e4', dtype=np.int64, initial=0, to_write=True)
+    e5 = Variable('e5', dtype=np.int64, initial=0, to_write=True)
+    e6 = Variable('e6', dtype=np.int64, initial=0, to_write=True)
+    e7 = Variable('e7', dtype=np.int64, initial=0, to_write=True)
+    e8 = Variable('e8', dtype=np.int64, initial=0, to_write=True)
+    e9 = Variable('e9', dtype=np.int64, initial=0, to_write=True)
 
     ##########################################################################
     # TEMPORARY VARIABLES FOR TESTING ########################################
     ##########################################################################
 
     # Particle mass
-    mass = Variable('mass',
-                    dtype=np.float64,
-                    initial=1.,
-                    to_write=True)
+    mass = Variable('mass', dtype=np.float64, initial=1., to_write=True)
 
     # Particle mass lost to event loc 0
-    m0 = Variable('m0',
-                  dtype=np.float64,
-                  initial=0.,
-                  to_write=True)
-
-    # Particle mass lost to event loc 1
-    m1 = Variable('m1',
-                  dtype=np.float64,
-                  initial=0.,
-                  to_write=True)
-
-    # Particle mass lost to event loc 2
-    m2 = Variable('m2',
-                  dtype=np.float64,
-                  initial=0.,
-                  to_write=True)
-
-    # Particle mass lost to event loc 3
-    m3 = Variable('m3',
-                  dtype=np.float64,
-                  initial=0.,
-                  to_write=True)
-
-    # Particle mass lost to event loc 4
-    m4 = Variable('m4',
-                  dtype=np.float64,
-                  initial=0.,
-                  to_write=True)
-
-    # Test variables
-    test1 = Variable('test1',
-                    dtype=np.float64,
-                    initial=0.,
-                    to_write=True)
-
-    test2 = Variable('test2',
-                    dtype=np.float64,
-                    initial=0.,
-                    to_write=True)
-
-    test3 = Variable('test3',
-                    dtype=np.float64,
-                    initial=0.,
-                    to_write=True)
-
+    m0 = Variable('m0', dtype=np.float64, initial=0., to_write=True)
+    m1 = Variable('m1', dtype=np.float64, initial=0., to_write=True)
+    m2 = Variable('m2', dtype=np.float64, initial=0., to_write=True)
+    m3 = Variable('m3', dtype=np.float64, initial=0., to_write=True)
+    m4 = Variable('m4', dtype=np.float64, initial=0., to_write=True)
+    m5 = Variable('m5', dtype=np.float64, initial=0., to_write=True)
+    m6 = Variable('m6', dtype=np.float64, initial=0., to_write=True)
+    m7 = Variable('m7', dtype=np.float64, initial=0., to_write=True)
+    m8 = Variable('m8', dtype=np.float64, initial=0., to_write=True)
+    m9 = Variable('m9', dtype=np.float64, initial=0., to_write=True)
 
 ##############################################################################
 # KERNELS ####################################################################
@@ -505,29 +448,33 @@ def testing_mass(particle, fieldset, time):
     lb = 5.79e-7 # beaching
     ll = ls + lb
 
-    # Subtract mass due to losses from sinking
-    # particle.mass -= particle.mass*particle.dt*ls
-
-    # Subtract mass due to losses from beaching
+    # Subtract mass due to losses
     if particle.sink_id > 0:
+        particle.mass -= particle.mass*particle.dt*ll
         if particle.e_num == 0:
             particle.m0 += particle.mass*particle.dt*ll
-            particle.mass -= particle.mass*particle.dt*ll
         elif particle.e_num == 1:
             particle.m1 += particle.mass*particle.dt*ll
-            particle.mass -= particle.mass*particle.dt*ll
         elif particle.e_num == 2:
             particle.m2 += particle.mass*particle.dt*ll
-            particle.mass -= particle.mass*particle.dt*ll
         elif particle.e_num == 3:
             particle.m3 += particle.mass*particle.dt*ll
-            particle.mass -= particle.mass*particle.dt*ll
         elif particle.e_num == 4:
             particle.m4 += particle.mass*particle.dt*ll
-            particle.mass -= particle.mass*particle.dt*ll
+        elif particle.e_num == 5:
+            particle.m5 += particle.mass*particle.dt*ll
+        elif particle.e_num == 6:
+            particle.m6 += particle.mass*particle.dt*ll
+        elif particle.e_num == 7:
+            particle.m7 += particle.mass*particle.dt*ll
+        elif particle.e_num == 8:
+            particle.m8 += particle.mass*particle.dt*ll
+        elif particle.e_num == 9:
+            particle.m9 += particle.mass*particle.dt*ll
     elif particle.iso > 0:
         particle.mass -= particle.mass*particle.dt*ll
-
+    else:
+        particle.mass -= particle.mass*particle.dt*ls
 
 # Controller for managing particle events
 def event(particle, fieldset, time):
@@ -552,6 +499,7 @@ def event(particle, fieldset, time):
     # 3 Manage particle event if relevant
     save_event = False
     new_event = False
+    delete_particle = False
 
     # Trigger event if particle is within selected sink site
     if particle.sink_id > 0:
@@ -591,7 +539,7 @@ def event(particle, fieldset, time):
     if save_event:
         # Save actual values
         # Unfortunately, due to the limited functions allowed in parcels, this
-        # required a horrendous if-else chain
+        # required an horrendous if-else chain
 
         if particle.e_num == 0:
             particle.e0 += (particle.actual_sink_t0)
@@ -623,10 +571,37 @@ def event(particle, fieldset, time):
             particle.e4 += (particle.actual_sink_status)*2**40
             particle.e4 += (particle.actual_sink_id)*2**52
 
-            particle.delete() # Delete particle, since no more sinks can be saved
+        elif particle.e_num == 5:
+            particle.e5 += (particle.actual_sink_t0)
+            particle.e5 += (particle.actual_sink_ct)*2**20
+            particle.e5 += (particle.actual_sink_status)*2**40
+            particle.e5 += (particle.actual_sink_id)*2**52
 
-        else:
-            particle.delete()
+        elif particle.e_num == 6:
+            particle.e6 += (particle.actual_sink_t0)
+            particle.e6 += (particle.actual_sink_ct)*2**20
+            particle.e6 += (particle.actual_sink_status)*2**40
+            particle.e6 += (particle.actual_sink_id)*2**52
+
+        elif particle.e_num == 7:
+            particle.e7 += (particle.actual_sink_t0)
+            particle.e7 += (particle.actual_sink_ct)*2**20
+            particle.e7 += (particle.actual_sink_status)*2**40
+            particle.e7 += (particle.actual_sink_id)*2**52
+
+        elif particle.e_num == 8:
+            particle.e8 += (particle.actual_sink_t0)
+            particle.e8 += (particle.actual_sink_ct)*2**20
+            particle.e8 += (particle.actual_sink_status)*2**40
+            particle.e8 += (particle.actual_sink_id)*2**52
+
+        elif particle.e_num == 9:
+            particle.e9 += (particle.actual_sink_t0)
+            particle.e9 += (particle.actual_sink_ct)*2**20
+            particle.e9 += (particle.actual_sink_status)*2**40
+            particle.e9 += (particle.actual_sink_id)*2**52
+
+            particle.delete() # Delete particle, since no more sinks can be saved
 
         # Then reset actual values to zero
         particle.actual_sink_t0 = 0
@@ -650,6 +625,13 @@ def event(particle, fieldset, time):
 
         # ID of current sink
         particle.actual_sink_id = particle.sink_id
+
+    # Finally, check if particle needs to be deleted
+    if particle.ot > fieldset.max_age - 3600:
+
+        # Only delete particles where at least 1 event has been recorded
+        if particle.e_num > 0:
+            particle.delete()
 
 
 def antibeach(particle, fieldset, time):
@@ -685,12 +667,6 @@ def deleteParticle(particle, fieldset, time):
     #  Recovery kernel to delete a particle if an error occurs
     particle.delete()
 
-
-def time_at_sea(particle, fieldset, time):
-    # Delete particle if the maximum age is exceeded
-    if particle.ot > fieldset.max_age:
-        particle.delete()
-
 ##############################################################################
 # INITIALISE SIMULATION AND RUN                                              #
 ##############################################################################
@@ -702,25 +678,24 @@ pset = ParticleSet.from_list(fieldset=fieldset,
                              lat  = particles['pos']['lat'],
                              time = particles['pos']['time'],
                              rp0  = particles['pos']['rp0'],
-                             cp0  = particles['pos']['cp0'])
+                             cp0  = particles['pos']['cp0'],
+                             source_id = particles['pos']['iso'])
 
 print(str(len(particles['pos']['time'])) + ' particles released!')
 
-traj = pset.ParticleFile(name=fh['traj'], write_ondelete=True)
-
-if param['max_age']:
-    kernels = (pset.Kernel(AdvectionRK4) +
-               pset.Kernel(event) +
-               pset.Kernel(testing_mass) +
-               pset.Kernel(antibeach) +
-               pset.Kernel(time_at_sea) +
-               pset.Kernel(periodicBC))
+if param['test']:
+    traj = pset.ParticleFile(name=fh['traj'], outputdt=param['dt_out'])
 else:
-    kernels = (pset.Kernel(AdvectionRK4) +
-               pset.Kernel(event) +
-               pset.Kernel(testing_mass) +
-               pset.Kernel(antibeach) +
-               pset.Kernel(periodicBC))
+    traj = pset.ParticleFile(name=fh['traj'], write_ondelete=True)
+
+kernels = (pset.Kernel(AdvectionRK4) +
+           pset.Kernel(periodicBC) +
+           pset.Kernel(antibeach) +
+           pset.Kernel(event) +
+           pset.Kernel(testing_mass))
+
+if param['Kh']:
+    kernels += pset.Kernel(DiffusionUniformKh)
 
 pset.execute(kernels,
              endtime=param['endtime'],
