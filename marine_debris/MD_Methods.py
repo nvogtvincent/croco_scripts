@@ -12,7 +12,6 @@ import geopandas as gpd
 import matplotlib.pyplot as plt
 import cmasher as cmr
 import cartopy.crs as ccrs
-import cartopy.feature as cfeature
 import matplotlib.ticker as mticker
 from matplotlib import colors
 from netCDF4 import Dataset
