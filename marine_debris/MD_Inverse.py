@@ -17,7 +17,6 @@ from parcels import (Field, FieldSet, ParticleSet, JITParticle, AdvectionRK4,
 from netCDF4 import Dataset, num2date
 from datetime import timedelta, datetime
 from glob import glob
-from mpi4py import MPI
 from sys import argv
 
 ##############################################################################
@@ -52,12 +51,12 @@ param = {# Release timing
          'stokes'            : True,          # Toggle to use Stokes drift
          'windage'           : False,         # Toggle to use windage
          'fw'                : 0.0,           # Windage fraction
-         'max_age'           : 10,            # Max age (years). 0 == inf.
+         'max_age'           : 0,             # Max age (years). 0 == inf.
 
          # Runtime parameters
-         'Yend'              : y_in-10,                 # Last year of simulation
+         'Yend'              : 1993,                 # Last year of simulation
          'Mend'              : 1   ,                    # Last month
-         'Dend'              : 1   ,                    # Last day (00:00, start)
+         'Dend'              : 2   ,                    # Last day (00:00, start)
          'dt_RK4'            : timedelta(minutes=-30),  # RK4 time-step
 
          # Output parameters
@@ -93,9 +92,10 @@ fh = {'ocean':   sorted(glob(dirs['model'] + 'OCEAN_*.nc')),
       'sid':     dirs['traj'] + 'sid.nc'}
 
 # MODIFICATION TO PREVENT CRASHING IF END_YR=1993
-if param['Yend'] == 1993:
-    if param['Dend'] == 1:
-        param['Dend'] = 2
+if param['Yend'] <= 1993:
+    param['Yend'] = 1993
+    param['Mend'] = 1
+    param['Dend'] = 2
 
 ##############################################################################
 # SET UP PARTICLE RELEASES                                                   #
@@ -191,8 +191,8 @@ if param['stokes']:
     variables = {'U': 'VSDX',
                  'V': 'VSDY'}
 
-    dimensions = {'U': {'lon': 'lon_rho', 'lat': 'lat_rho', 'time': 'time'},
-                  'V': {'lon': 'lon_rho', 'lat': 'lat_rho', 'time': 'time'}}
+    dimensions = {'U': {'lon': 'longitude', 'lat': 'latitude', 'time': 'time'},
+                  'V': {'lon': 'longitude', 'lat': 'latitude', 'time': 'time'}}
 
     interp_method = {'U' : 'linear',
                      'V' : 'linear'}
@@ -326,8 +326,12 @@ def antibeach(particle, fieldset, time):
         particle.uc = fieldset.cnormx_rho[particle]
         particle.vc = fieldset.cnormy_rho[particle]
 
-        particle.uc *= -1*(particle.cd - 0.5)**2
-        particle.vc *= -1*(particle.cd - 0.5)**2
+        if particle.cd < 0.1:
+            particle.uc *= -1*(particle.cd - 0.5)**2 -75*(particle.cd - 0.1)**2
+            particle.vc *= -1*(particle.cd - 0.5)**2 -75*(particle.cd - 0.1)**2
+        else:
+            particle.uc *= -1*(particle.cd - 0.5)**2
+            particle.vc *= -1*(particle.cd - 0.5)**2
 
         particle.lon += particle.uc*particle.dt
         particle.lat += particle.vc*particle.dt
