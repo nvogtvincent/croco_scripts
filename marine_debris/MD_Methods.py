@@ -9,6 +9,7 @@ import numpy as np
 import os.path
 import numba
 import geopandas as gpd
+import pandas as pd
 import matplotlib.pyplot as plt
 import cmasher as cmr
 import cartopy.crs as ccrs
@@ -19,7 +20,7 @@ from calendar import monthrange
 from scipy.ndimage import distance_transform_edt
 from scipy.interpolate import griddata
 from skimage.measure import block_reduce
-from datetime import datetime
+from datetime import datetime, timedelta
 from osgeo import gdal
 
 
@@ -227,12 +228,163 @@ def release_time(param, **kwargs):
 
     time -= t0
 
+    try:
+        if param['delay_start']:
+            time += 3600*12
+    except:
+        pass
+
     return time
 
-def release_loc(param, fh):
+
+def release_loc_ocean(param, fh):
     # Generates initial coordinates for particle releases at a single time
-    # frame based on the ISO codes for countries of interest. Particles are
-    # only released at least 0.5 cells away from the land mask.
+    # frame for the ocean. We release within a geographical region of interest
+    # (taking into account the land mask) and assign the particle ID. The
+    # particle ID can later be used to assign the fishing intensity value.
+
+    pn  = param['pn']
+
+    # Firstly load the requisite fields:
+    # - rho & psi coordinates
+    # - lsm_rho mask
+    # - id_psi mask (cell ids)
+
+    with Dataset(fh['grid'], mode='r') as nc:
+        lon_psi = np.array(nc.variables['lon_psi'][:])
+        lat_psi = np.array(nc.variables['lat_psi'][:])
+
+        lon_rho = np.array(nc.variables['lon_rho'][:])
+
+        id_psi    = np.array(nc.variables['source_id_psi'][:])
+        lsm_psi   = np.array(nc.variables['lsm_psi'][:])
+
+    marine_release_loc = np.ones_like(id_psi, dtype=np.int32)
+
+    plt.imshow(lsm_psi)
+    plt.scatter(2819, 934)
+
+    # Mask with limits
+    y_idx_max = np.searchsorted(lat_psi, param['lat_north'])
+    y_idx_min = np.searchsorted(lat_psi, param['lat_south'])
+    x_idx_max = np.searchsorted(lon_psi, param['lon_east'])
+    x_idx_min = np.searchsorted(lon_psi, param['lon_west'])
+
+    marine_release_loc[:y_idx_min, :] = 0
+    marine_release_loc[y_idx_max:, :] = 0
+    marine_release_loc[:, :x_idx_min] = 0
+    marine_release_loc[:, x_idx_max:] = 0
+
+    # Mask with lsm
+    marine_release_loc *= (1-lsm_psi)
+
+    # We also need to calculate how many particles are being released within
+    # this GFW cell (i.e. out of 144*pn_cell)
+
+    # Assign a unique ID to each 1x1 degree (GFW) cell
+    gfw_id = np.arange(np.shape(id_psi)[0]*np.shape(id_psi)[1]/144, dtype=np.int32)
+    gfw_id = gfw_id.reshape((int(np.shape(id_psi)[0]/12), -1))
+
+    # Expand to 1/12 grid and mask with lsm
+    gfw_id12 = np.kron(gfw_id, np.ones((12,12), dtype=np.int32))
+    gfw_id12[lsm_psi == 1] = -1
+    gfw_id12[:y_idx_min, :] = -1
+    gfw_id12[y_idx_max:, :] = -1
+    gfw_id12[:, :x_idx_min] = -1
+    gfw_id12[:, x_idx_max:] = -1
+
+    gfw_uniques = np.unique(gfw_id12, return_counts=True)
+    gfw_dict = dict(zip(gfw_uniques[0], gfw_uniques[1]))
+
+    # with Dataset(fh['fish'], mode='r') as nc:
+    #     lon_bnd_fsh = np.array(nc.variables['lon_bnd'][:])
+    #     lat_bnd_fsh = np.array(nc.variables['lat_bnd'][:])
+
+    #     fish_int   = np.array(nc.variables['all_A_time_integral'][:])
+
+    # # # Associate an ID to every fish cell
+    # fish_id_gfw = np.zeros_like(fish_int, dtype=np.int64)
+    # for i in range(np.shape(fish_id_gfw)[0]):
+    #     for j in range(np.shape(fish_id_gfw)[1]):
+    #         fish_id_gfw[i, j] = 1000*i + j
+
+    # # # Upscale fish grid to model resolution
+    # fish_id_ = np.kron(fish_id_gfw, np.ones((12,12), dtype=np.float32))
+
+    # # # Embed within model grid
+    # fish_id = -1*np.ones_like(id_psi)
+
+    # fsh_psi_lon = [np.where(lon_psi == lon_bnd_fsh[0] + (1/24))[0][0],
+    #                 np.where(lon_psi == lon_bnd_fsh[-1] - (1/24))[0][0]]
+    # fsh_psi_lat = [np.where(lat_psi == lat_bnd_fsh[0] + (1/24))[0][0],
+    #                 np.where(lat_psi == lat_bnd_fsh[-1] - (1/24))[0][0]]
+
+    # fish_id[fsh_psi_lat[0]:fsh_psi_lat[1]+1,
+    #         fsh_psi_lon[0]:fsh_psi_lon[1]+1] = fish_id_
+
+    # # Apply landmask
+    # fish_id[lsm_psi == 1] = -1
+
+    # ADD CODE TO COVER PARTS OF THE OCEAN IN THE MODEL BUT NOT ON GFW?
+    # OR FIND AN ALGORITHM TO GO FROM ID_PSI -> FISH_ID? !!!!
+
+    # Apply latitudinal limits
+
+    # Extract cell grid indices
+    idx = list(np.where(marine_release_loc == 1))
+
+    # Calculate the total number of particles
+    nl  = idx[0].shape[0]  # Number of locations
+    id_list = id_psi[tuple(idx)]
+
+    pn_cell = pn**2
+    pn_tot = nl*pn_cell
+
+    print('')
+    print('Total number of particles generated per relase: ' + str(pn_tot))
+
+    dX = lon_rho[1] - lon_rho[0]  # Grid spacing
+
+    lon_out = np.zeros((pn_tot,), dtype=np.float64)
+    lat_out = np.zeros((pn_tot,), dtype=np.float64)
+    id_out = np.zeros((pn_tot,), dtype=np.int32)
+    np_per_gfw_out = np.zeros((pn_tot,), dtype=np.int32)
+
+    for loc in range(nl):
+        # Find cell location
+        loc_yidx = idx[0][loc]
+        loc_xidx = idx[1][loc]
+
+        # Calculate initial positions
+        dx = dX/pn                # Particle spacing
+        gx = np.linspace((-dX/2 + dx/2), (dX/2 - dx/2), num=pn)
+        gridx, gridy = [grid.flatten() for grid in np.meshgrid(gx, gx)]
+
+        loc_y = lat_psi[loc_yidx]
+        loc_x = lon_psi[loc_xidx]
+
+        loc_id = id_psi[loc_yidx, loc_xidx]
+        gfw_id_cell = gfw_id12[loc_yidx, loc_xidx]
+
+        s_idx = loc*pn_cell
+        e_idx = (loc+1)*pn_cell
+
+        lon_out[s_idx:e_idx] = gridx + loc_x
+        lat_out[s_idx:e_idx] = gridy + loc_y
+        id_out[s_idx:e_idx] = np.ones(np.shape(gridx), dtype=np.int32)*loc_id
+        np_per_gfw_out[s_idx:e_idx] = np.ones(np.shape(gridx), dtype=np.int32)*gfw_dict[gfw_id_cell]
+
+    pos0 = {'lon': lon_out,
+            'lat': lat_out,
+            'id': id_out,
+            'gfw': np_per_gfw_out}
+
+    return pos0
+
+
+def release_loc_land(param, fh):
+    # Generates initial coordinates for particle releases at a single time
+    # frame based on the ISO codes for countries of interest.
 
     ids = param['iso_list']
     # pn  = param['pn']
@@ -479,11 +631,20 @@ def add_times(particles, param):
 
     data['lon']  = np.tile(data['lon'], ntimes)
     data['lat']  = np.tile(data['lat'], ntimes)
-    data['iso']  = np.tile(data['iso'], ntimes)
     data['id']   = np.tile(data['id'], ntimes)
-    data['cp0']   = np.tile(data['cp0'], ntimes)
-    data['rp0']   = np.tile(data['rp0'], ntimes)
     data['time'] = np.repeat(times, npart)
+
+    try:
+        data['gfw']   = np.tile(data['gfw'], ntimes)
+    except:
+        pass
+
+    try:
+        data['iso']  = np.tile(data['iso'], ntimes)
+        data['cp0']   = np.tile(data['cp0'], ntimes)
+        data['rp0']   = np.tile(data['rp0'], ntimes)
+    except:
+        pass
 
     # Also now calculation partitioning of particles
     if param['total_partitions'] > 1:
@@ -493,11 +654,20 @@ def add_times(particles, param):
 
         data['lon'] = data['lon'][i0:i1]
         data['lat'] = data['lat'][i0:i1]
-        data['iso'] = data['iso'][i0:i1]
         data['id'] = data['id'][i0:i1]
-        data['cp0'] = data['cp0'][i0:i1]
-        data['rp0'] = data['rp0'][i0:i1]
         data['time'] = data['time'][i0:i1]
+
+        try:
+            data['gfw']   = data['gfw'][i0:i1]
+        except:
+            pass
+
+        try:
+            data['iso'] = data['iso'][i0:i1]
+            data['cp0'] = data['cp0'][i0:i1]
+            data['rp0'] = data['rp0'][i0:i1]
+        except:
+            pass
 
     return data
 
@@ -968,3 +1138,11 @@ def gridgen(fh, dirs, param, **kwargs):
     return grid
 
 
+
+
+
+
+# sink_id = np.zeros((n_traj, n_events), dtype=np.int64)
+# time_at_sink = np.zeros((n_traj, n_events), dtype=np.int64)
+# prior_tb = np.zeros((n_traj, n_events), dtype=np.int64)
+# prior_ts = np.zeros((n_traj, n_events), dtype=np.int64)

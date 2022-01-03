@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-This script tracks particles arriving at a country backward in time using the
+This script tracks particles arriving at a country forward in time using the
 CMEMS GLORYS12V1 reanalysis (current and Stokes drift)
 @author: Noam Vogt-Vincent
 """
@@ -31,7 +31,7 @@ try:
     part = int(argv[4])
 except:
     y_in = 2019
-    m_in = 1
+    m_in = 9
     tot_part = 1
     part = 0
 
@@ -46,7 +46,7 @@ param = {# Release timing
 
          # Seeding strategy
          'threshold'         : 1e2,           # Minimum plastic threshold (kg)
-         'log_mult'          : 18,            # Log-multiplier
+         'log_mult'          : 16.4,            # Log-multiplier
 
          # Sink locations
          'id'                : [690],         # ISO IDs of sink countries
@@ -54,7 +54,7 @@ param = {# Release timing
          # Simulation parameters
          'stokes'            : True,          # Toggle to use Stokes drift
          'windage'           : False,         # Toggle to use windage
-         'fw'                : 0.0,           # Windage fraction
+         'fw'                : 0.0,           # Windage fraction (0.5/1.0/2.0/3.0)
          'Kh'                : 10.,           # Horizontal diffusion coefficient (m2/s, 0 = off)
          'max_age'           : 10.,           # Max age (years). 0 == inf.
 
@@ -106,6 +106,10 @@ if param['Yend'] <= 1993:
     param['Mend'] = 1
     param['Dend'] = 2
 
+if param['Ymin'] == 1993:
+    if param['Mmin'] == 1:
+        param['delay_start'] = True
+
 if param['max_age'] == 0:
     param['max_age'] = 1e20
 
@@ -152,7 +156,7 @@ if not param['test']:
                                    delimiter=',',
                                    usecols=0,
                                    skiprows=1)
-    particles['loc_array'] = mdm.release_loc(param, fh)
+    particles['loc_array'] = mdm.release_loc_land(param, fh)
 else:
     if param['line_rel']:
         particles['loc_array'] = {}
@@ -218,10 +222,43 @@ if param['stokes']:
     fieldset_wave = FieldSet.from_netcdf(filenames, variables, dimensions,
                                          interp_method=interp_method)
 
+if param['windage']:
+    # WINDAGE (FROM ERA5)
+    if param['fw'] not in [0.5, 1.0, 2.0, 3.0]:
+        raise NotImplementedError('Windage fraction not available!')
+
+    wind_fh = 'WIND' + format(int(param['fw']*10), '04') + '*'
+    vname = format(int(param['fw']*10), '04')
+    fh['wind'] = sorted(glob(dirs['model'] + wind_fh))
+
+    filenames = fh['wind']
+
+    variables = {'U': 'u' + vname,
+                 'V': 'v' + vname}
+
+    dimensions = {'U': {'lon': 'longitude', 'lat': 'latitude', 'time': 'time'},
+                  'V': {'lon': 'longitude', 'lat': 'latitude', 'time': 'time'}}
+
+    interp_method = {'U' : 'linear',
+                     'V' : 'linear'}
+
+    fieldset_wind = FieldSet.from_netcdf(filenames, variables, dimensions,
+                                         interp_method=interp_method)
+
+if param['windage'] and param['stokes']:
+    fieldset = FieldSet(U=fieldset_ocean.U+fieldset_wave.U+fieldset_wind.U,
+                        V=fieldset_ocean.U+fieldset_wave.U+fieldset_wind.U)
+elif param['windage']:
+    fieldset = FieldSet(U=fieldset_ocean.U+fieldset_wind.U,
+                        V=fieldset_ocean.V+fieldset_wind.V)
+elif param['stokes']:
     fieldset = FieldSet(U=fieldset_ocean.U+fieldset_wave.U,
                         V=fieldset_ocean.V+fieldset_wave.V)
 else:
     fieldset = fieldset_ocean
+
+
+
 
 # ADD ADDITIONAL FIELDS
 # Country identifier grid (on psi grid, nearest)
@@ -340,17 +377,24 @@ class debris(JITParticle):
     # Source cell ID (specifically identifying source cell)
     source_id = Variable('source_id',
                          dtype=np.int32,
-                         to_write='once')
+                         to_write=True)
+
+    # Source cell ID - specifically identifying source cell
+    source_cell = Variable('source_cell',
+                           dtype=np.int32,
+                           to_write=True)
 
     # Source cell ID (Initial mass of plastic from direct coastal input)
     cp0 = Variable('cp0',
                    dtype=np.float32,
-                   to_write='once')
+                   to_write=True)
 
     # Source cell ID (Initial mass of plastic from riverine input)
     rp0 = Variable('rp0',
                    dtype=np.float32,
-                   to_write='once')
+                   to_write=True)
+
+
 
     ##########################################################################
     # ANTIBEACHING VARIABLES #################################################
@@ -627,7 +671,8 @@ pset = ParticleSet.from_list(fieldset=fieldset,
                              time = particles['pos']['time'],
                              rp0  = particles['pos']['rp0'],
                              cp0  = particles['pos']['cp0'],
-                             source_id = particles['pos']['iso'])
+                             source_id = particles['pos']['iso'],
+                             source_cell = particles['pos']['id'])
 
 print(str(len(particles['pos']['time'])) + ' particles released!')
 
