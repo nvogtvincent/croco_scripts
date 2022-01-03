@@ -29,11 +29,15 @@ import time
 
 # PARAMETERS
 param = { # Runtime parameters
-         'dt': 2700,    # Simulation timestep (s)
+         'dt': 1800,    # Simulation timestep (s)
 
          # Analysis parameters
          'ls': 3650,    # Sinking timescale (days)
-         'lb': 40,}     # Beaching timescale (days)
+         'lb': 40,      # Beaching timescale (days)
+
+         # Mode
+         'mode': 'marine'   # Options: land/marine
+         }
 
 # DIRECTORIES
 dirs = {'script': os.path.dirname(os.path.realpath(__file__)),
@@ -52,35 +56,18 @@ fh = {'grid':    dirs['grid'] + 'griddata.nc',
 param['ls'] = 1/(param['ls']*3600*24)
 param['lb'] = 1/(param['lb']*3600*24)
 
+if param['mode'] == 'land':
+    param['mode'] = True
+else:
+    param['mode'] = False
+
+# param['ls'] = 3.17e-9 # sinking
+# param['lb'] = 5.79e-7 # beaching
 ##############################################################################
 # EXTRACT EVENT DATA                                                         #
 ##############################################################################
 
-# def extract(code_list, dt):
-#     sink_id = np.zeros_like(code_list, dtype=np.int64)
-#     time_at_sink = np.zeros_like(code_list, dtype=np.int64)
-#     prior_tb = np.zeros_like(code_list, dtype=np.int64)
-#     prior_ts = np.zeros_like(code_list, dtype=np.int64)
 
-#     p0 = 2**20
-#     p1 = 2**40
-#     p2 = 2**52
-
-#     for row in range(np.shape(code_list)[0]):
-#         val = code_list[row]
-#         val3 = int(val%p0)
-#         val2 = int(((val-val3)%p1)/p0)
-#         val1 = int(((val-val2)%p2)/p1)
-#         val0 = int((val-val2)/p2)
-
-#         sink_id[row] = val0
-#         time_at_sink[row] = val1*dt
-#         prior_tb[row] = val2*dt
-#         prior_ts[row] = val3*dt
-
-#     return [sink_id, time_at_sink, prior_tb, prior_ts]
-
-# @njit
 def translate_events(array):
     # Create output arrays
     sink_id = np.zeros_like(array, dtype=np.int32)
@@ -108,9 +95,6 @@ def translate_events(array):
     return [sink_id, time_at_sink, prior_tb, prior_ts]
 
 
-
-
-
 def convert_events(fh_list, dt, ls, lb, n_events):
     # Keep track of some basic data
     total_particles = 0
@@ -121,6 +105,7 @@ def convert_events(fh_list, dt, ls, lb, n_events):
 
     # Open all data
     for fhi, fh in enumerate(fh_list):
+        print(str(100*fhi/len(fh_list))+'%')
         with Dataset(fh, mode='r') as nc:
             e_num = nc.variables['e_num'][:]
             n_traj = np.shape(e_num)[0] # Number of trajectories in file
@@ -128,22 +113,32 @@ def convert_events(fh_list, dt, ls, lb, n_events):
             if n_traj:
                 # Extract origin date
                 y0 = int(fh.split('/')[-1].split('_')[0])
-                # m0 = int(fh.split('/')[-1].split('_')[1]) # PUT BACK IN!!!
-                m0 = 1                                 # TEMPORARY FOR TESTING FILES ONLY!!!
+                m0 = int(fh.split('/')[-1].split('_')[1])
                 t0 = datetime(year=y0, month=m0, day=1, hour=0)
 
                 # Firstly load primary variables into memory
                 raw_event_array = np.zeros((n_traj, n_events), dtype=np.int64)
-                raw_source_array = np.zeros((n_traj, n_events), dtype=np.int64)
-                raw_rp0_array = np.zeros((n_traj, n_events), dtype=np.float32)
-                raw_cp0_array = np.zeros((n_traj, n_events), dtype=np.float32)
+                raw_source_cell_array = np.zeros((n_traj, n_events), dtype=np.int64)
+
+                if param['mode']:
+                    raw_rp0_array = np.zeros((n_traj, n_events), dtype=np.float32)
+                    raw_cp0_array = np.zeros((n_traj, n_events), dtype=np.float32)
+                    raw_source_id_array = np.zeros((n_traj, n_events), dtype=np.int64)
+                else:
+                    raw_gfw_num_array = np.zeros((n_traj, n_events), dtype=np.float32)
 
                 for i in range(n_events):
                     raw_event_array[:, i] = nc.variables['e' + str(i)][:, 0]
 
-                raw_source_array[:] = nc.variables['source_id'][:]
-                raw_rp0_array[:] = nc.variables['rp0'][:]
-                raw_cp0_array[:] = nc.variables['cp0'][:]
+                raw_source_cell_array[:] = nc.variables['source_cell'][:]
+
+                # Divide plastic fluxes by 12 to convert kg/yr -> kg/mo
+                if param['mode']:
+                    raw_source_id_array[:] = nc.variables['source_id'][:]
+                    raw_rp0_array[:] = nc.variables['rp0'][:]/12
+                    raw_cp0_array[:] = nc.variables['cp0'][:]/12
+                else:
+                    raw_gfw_num_array[:] = nc.variables['gfw_num'][:]
 
                 # Update stats
                 total_particles += n_traj
@@ -155,14 +150,22 @@ def convert_events(fh_list, dt, ls, lb, n_events):
                 mask = raw_event_array != 0
                 raw_event_array = raw_event_array[mask]
 
-                raw_source_array = raw_source_array.flatten()
-                raw_source_array = raw_source_array[mask]
+                raw_source_cell_array = raw_source_cell_array.flatten()
+                raw_source_cell_array = raw_source_cell_array[mask]
 
-                raw_rp0_array = raw_rp0_array.flatten()
-                raw_rp0_array = raw_rp0_array[mask]
+                if param['mode']:
+                    raw_source_id_array = raw_source_id_array.flatten()
+                    raw_source_id_array = raw_source_id_array[mask]
 
-                raw_cp0_array = raw_cp0_array.flatten()
-                raw_cp0_array = raw_cp0_array[mask]
+                    raw_rp0_array = raw_rp0_array.flatten()
+                    raw_rp0_array = raw_rp0_array[mask]
+
+                    raw_cp0_array = raw_cp0_array.flatten()
+                    raw_cp0_array = raw_cp0_array[mask]
+                else:
+                    raw_gfw_num_array = raw_gfw_num_array.flatten()
+                    raw_gfw_num_array = raw_gfw_num_array[mask]
+
 
                 # Now convert events
                 sink_array = np.zeros_like(raw_event_array, dtype=np.int64)
@@ -183,10 +186,16 @@ def convert_events(fh_list, dt, ls, lb, n_events):
                 loss = prior_mass - post_mass
 
                 # Now form output array
-                frame = pd.DataFrame(data=raw_source_array, columns=['source_id'])
-                frame['sink_id'] = sink_array
-                frame['plastic_flux'] = loss*(raw_rp0_array + raw_cp0_array)
+                frame = pd.DataFrame(data=raw_source_cell_array, columns=['source_cell'])
 
+                if param['mode']:
+                    frame['plastic_flux'] = loss*(raw_rp0_array + raw_cp0_array)
+                    frame['source_id'] = raw_source_id_array
+                else:
+                    frame['plastic_flux'] = loss
+                    frame['gfw_num'] = raw_gfw_num_array
+
+                frame['sink_id'] = sink_array
                 frame['days_at_sea'] = prior_ts_array
                 frame['days_at_sea'] = pd.to_timedelta(frame['days_at_sea'], unit='S')
                 frame['sink_date'] = frame['days_at_sea'] + t0
@@ -209,6 +218,10 @@ def convert_events(fh_list, dt, ls, lb, n_events):
                 else:
                     data = data.append(frame, ignore_index=True)
 
+    if (data['days_at_sea'].max() > 3660) or (data['days_at_sea'].max() < 3600):
+        print('WARNING: ARE YOU SURE THAT THE TIMESTEP IS CORRECT?')
+        print('max: ' + str(data['days_at_sea'].max()) + ' days')
+
     # Store stats
     stats = {'total_particles': total_particles,
              'total_encounters': total_encounters,
@@ -219,5 +232,5 @@ def convert_events(fh_list, dt, ls, lb, n_events):
 
 
 t0 = time.time()
-data, stats = convert_events(fh['traj'], param['dt'], param['ls'], param['lb'], 10)
+data, stats = convert_events(fh['traj'], param['dt'], param['ls'], param['lb'], 20)
 print(time.time() - t0)
