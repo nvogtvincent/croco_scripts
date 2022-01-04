@@ -54,18 +54,18 @@ param = {# Release timing
          # Simulation parameters
          'stokes'            : True,          # Toggle to use Stokes drift
          'windage'           : False,         # Toggle to use windage
-         'fw'                : 0.0,           # Windage fraction (0.5/1.0/2.0/3.0)
+         'fw'                : 1.0,           # Windage fraction (0.5/1.0/2.0/3.0)
          'Kh'                : 10.,           # Horizontal diffusion coefficient (m2/s, 0 = off)
          'max_age'           : 10.,           # Max age (years). 0 == inf.
 
          # Runtime parameters
-         'Yend'              : y_in+10,                # Last year of simulation
+         'Yend'              : y_in+0,                # Last year of simulation
          'Mend'              : m_in   ,                # Last month
-         'Dend'              : 2   ,                   # Last day (00:00, start)
+         'Dend'              : 10   ,                   # Last day (00:00, start)
          'dt_RK4'            : timedelta(minutes=30),  # RK4 time-step
 
          # Output parameters
-         'fn_out'            : str(y_in) + '_' + str(m_in) + '_' + str(part) + '_Fwd.nc',  # Output filename
+         'fn_out'            : str(y_in) + '_' + str(m_in) + '_' + str(part) + '_FwdW0010.nc',  # Output filename
 
          # Partitioning
          'total_partitions'  : tot_part,
@@ -80,8 +80,8 @@ param = {# Release timing
                                 'cr' : 0.25},          # Fraction entering sea
 
          # Testing parameters
-         'test'              : False,                  # Activate test mode
-         'line_rel'          : False,                  # Release particles in line
+         'test'              : True,                  # Activate test mode
+         'line_rel'          : True,                  # Release particles in line
          'dt_out'            : timedelta(minutes=60),} # Output frequency (testing only)
 
 # DIRECTORIES
@@ -160,10 +160,10 @@ if not param['test']:
 else:
     if param['line_rel']:
         particles['loc_array'] = {}
-        particles['loc_array']['lon0'] = 56.25
-        particles['loc_array']['lon1'] = 56.25
-        particles['loc_array']['lat0'] = -4.7
-        particles['loc_array']['lat1'] = -3.7
+        particles['loc_array']['lon0'] = 49.34
+        particles['loc_array']['lon1'] = 49.34
+        particles['loc_array']['lat0'] = -12.3
+        particles['loc_array']['lat1'] = -11.8
 
         particles['loc_array']['ll'] = [np.linspace(particles['loc_array']['lon0'],
                                                     particles['loc_array']['lon1'],
@@ -247,7 +247,7 @@ if param['windage']:
 
 if param['windage'] and param['stokes']:
     fieldset = FieldSet(U=fieldset_ocean.U+fieldset_wave.U+fieldset_wind.U,
-                        V=fieldset_ocean.U+fieldset_wave.U+fieldset_wind.U)
+                        V=fieldset_ocean.V+fieldset_wave.V+fieldset_wind.V)
 elif param['windage']:
     fieldset = FieldSet(U=fieldset_ocean.U+fieldset_wind.U,
                         V=fieldset_ocean.V+fieldset_wind.V)
@@ -256,8 +256,6 @@ elif param['stokes']:
                         V=fieldset_ocean.V+fieldset_wave.V)
 else:
     fieldset = fieldset_ocean
-
-
 
 
 # ADD ADDITIONAL FIELDS
@@ -464,6 +462,16 @@ class debris(JITParticle):
     e7 = Variable('e7', dtype=np.int64, initial=0, to_write=True)
     e8 = Variable('e8', dtype=np.int64, initial=0, to_write=True)
     e9 = Variable('e9', dtype=np.int64, initial=0, to_write=True)
+    e10 = Variable('e10', dtype=np.int64, initial=0, to_write=True)
+    e11 = Variable('e11', dtype=np.int64, initial=0, to_write=True)
+    e12 = Variable('e12', dtype=np.int64, initial=0, to_write=True)
+    e13 = Variable('e13', dtype=np.int64, initial=0, to_write=True)
+    e14 = Variable('e14', dtype=np.int64, initial=0, to_write=True)
+    e15 = Variable('e15', dtype=np.int64, initial=0, to_write=True)
+    e16 = Variable('e16', dtype=np.int64, initial=0, to_write=True)
+    e17 = Variable('e17', dtype=np.int64, initial=0, to_write=True)
+    e18 = Variable('e18', dtype=np.int64, initial=0, to_write=True)
+    e19 = Variable('e19', dtype=np.int64, initial=0, to_write=True)
 
 
 ##############################################################################
@@ -539,60 +547,101 @@ def event(particle, fieldset, time):
             particle.e0 += (particle.actual_sink_ct)*2**20
             particle.e0 += (particle.actual_sink_status)*2**40
             particle.e0 += (particle.actual_sink_id)*2**52
-
         elif particle.e_num == 1:
             particle.e1 += (particle.actual_sink_t0)
             particle.e1 += (particle.actual_sink_ct)*2**20
             particle.e1 += (particle.actual_sink_status)*2**40
             particle.e1 += (particle.actual_sink_id)*2**52
-
         elif particle.e_num == 2:
             particle.e2 += (particle.actual_sink_t0)
             particle.e2 += (particle.actual_sink_ct)*2**20
             particle.e2 += (particle.actual_sink_status)*2**40
             particle.e2 += (particle.actual_sink_id)*2**52
-
         elif particle.e_num == 3:
             particle.e3 += (particle.actual_sink_t0)
             particle.e3 += (particle.actual_sink_ct)*2**20
             particle.e3 += (particle.actual_sink_status)*2**40
             particle.e3 += (particle.actual_sink_id)*2**52
-
         elif particle.e_num == 4:
             particle.e4 += (particle.actual_sink_t0)
             particle.e4 += (particle.actual_sink_ct)*2**20
             particle.e4 += (particle.actual_sink_status)*2**40
             particle.e4 += (particle.actual_sink_id)*2**52
-
         elif particle.e_num == 5:
             particle.e5 += (particle.actual_sink_t0)
             particle.e5 += (particle.actual_sink_ct)*2**20
             particle.e5 += (particle.actual_sink_status)*2**40
             particle.e5 += (particle.actual_sink_id)*2**52
-
         elif particle.e_num == 6:
             particle.e6 += (particle.actual_sink_t0)
             particle.e6 += (particle.actual_sink_ct)*2**20
             particle.e6 += (particle.actual_sink_status)*2**40
             particle.e6 += (particle.actual_sink_id)*2**52
-
         elif particle.e_num == 7:
             particle.e7 += (particle.actual_sink_t0)
             particle.e7 += (particle.actual_sink_ct)*2**20
             particle.e7 += (particle.actual_sink_status)*2**40
             particle.e7 += (particle.actual_sink_id)*2**52
-
         elif particle.e_num == 8:
             particle.e8 += (particle.actual_sink_t0)
             particle.e8 += (particle.actual_sink_ct)*2**20
             particle.e8 += (particle.actual_sink_status)*2**40
             particle.e8 += (particle.actual_sink_id)*2**52
-
         elif particle.e_num == 9:
             particle.e9 += (particle.actual_sink_t0)
             particle.e9 += (particle.actual_sink_ct)*2**20
             particle.e9 += (particle.actual_sink_status)*2**40
             particle.e9 += (particle.actual_sink_id)*2**52
+        elif particle.e_num == 10:
+            particle.e10 += (particle.actual_sink_t0)
+            particle.e10 += (particle.actual_sink_ct)*2**20
+            particle.e10 += (particle.actual_sink_status)*2**40
+            particle.e10 += (particle.actual_sink_id)*2**52
+        elif particle.e_num == 11:
+            particle.e11 += (particle.actual_sink_t0)
+            particle.e11 += (particle.actual_sink_ct)*2**20
+            particle.e11 += (particle.actual_sink_status)*2**40
+            particle.e11 += (particle.actual_sink_id)*2**52
+        elif particle.e_num == 12:
+            particle.e12 += (particle.actual_sink_t0)
+            particle.e12 += (particle.actual_sink_ct)*2**20
+            particle.e12 += (particle.actual_sink_status)*2**40
+            particle.e12 += (particle.actual_sink_id)*2**52
+        elif particle.e_num == 13:
+            particle.e13 += (particle.actual_sink_t0)
+            particle.e13 += (particle.actual_sink_ct)*2**20
+            particle.e13 += (particle.actual_sink_status)*2**40
+            particle.e13 += (particle.actual_sink_id)*2**52
+        elif particle.e_num == 14:
+            particle.e14 += (particle.actual_sink_t0)
+            particle.e14 += (particle.actual_sink_ct)*2**20
+            particle.e14 += (particle.actual_sink_status)*2**40
+            particle.e14 += (particle.actual_sink_id)*2**52
+        elif particle.e_num == 15:
+            particle.e15 += (particle.actual_sink_t0)
+            particle.e15 += (particle.actual_sink_ct)*2**20
+            particle.e15 += (particle.actual_sink_status)*2**40
+            particle.e15 += (particle.actual_sink_id)*2**52
+        elif particle.e_num == 16:
+            particle.e16 += (particle.actual_sink_t0)
+            particle.e16 += (particle.actual_sink_ct)*2**20
+            particle.e16 += (particle.actual_sink_status)*2**40
+            particle.e16 += (particle.actual_sink_id)*2**52
+        elif particle.e_num == 17:
+            particle.e17 += (particle.actual_sink_t0)
+            particle.e17 += (particle.actual_sink_ct)*2**20
+            particle.e17 += (particle.actual_sink_status)*2**40
+            particle.e17 += (particle.actual_sink_id)*2**52
+        elif particle.e_num == 18:
+            particle.e18 += (particle.actual_sink_t0)
+            particle.e18 += (particle.actual_sink_ct)*2**20
+            particle.e18 += (particle.actual_sink_status)*2**40
+            particle.e18 += (particle.actual_sink_id)*2**52
+        elif particle.e_num == 19:
+            particle.e19 += (particle.actual_sink_t0)
+            particle.e19 += (particle.actual_sink_ct)*2**20
+            particle.e19 += (particle.actual_sink_status)*2**40
+            particle.e19 += (particle.actual_sink_id)*2**52
 
             particle.delete() # Delete particle, since no more sinks can be saved
 
@@ -637,11 +686,11 @@ def antibeach(particle, fieldset, time):
         particle.vc = fieldset.cnormy_rho[particle]
 
         if particle.cd < 0.1:
-            particle.uc *= -1*(particle.cd - 0.5)**2 -75*(particle.cd - 0.1)**2
-            particle.vc *= -1*(particle.cd - 0.5)**2 -75*(particle.cd - 0.1)**2
+            particle.uc *= 1*(particle.cd - 0.5)**2 +75*(particle.cd - 0.1)**2
+            particle.vc *= 1*(particle.cd - 0.5)**2 +75*(particle.cd - 0.1)**2
         else:
-            particle.uc *= -1*(particle.cd - 0.5)**2
-            particle.vc *= -1*(particle.cd - 0.5)**2
+            particle.uc *= 1*(particle.cd - 0.5)**2
+            particle.vc *= 1*(particle.cd - 0.5)**2
 
         particle.lon += particle.uc*particle.dt
         particle.lat += particle.vc*particle.dt
@@ -704,7 +753,7 @@ traj.export()
 
 if param['test']:
     # Set display region
-    (lon_min, lon_max, lat_min, lat_max) = (54.5, 56.5, -5.5, -3.5)
+    (lon_min, lon_max, lat_min, lat_max) = (49, 50, -12.4, -11.4)
 
     # Import grids
     with Dataset(fh['grid'], mode='r') as nc:

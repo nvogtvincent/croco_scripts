@@ -499,55 +499,46 @@ def event(particle, fieldset, time):
             particle.e0 += (particle.actual_sink_ct)*2**20
             particle.e0 += (particle.actual_sink_status)*2**40
             particle.e0 += (particle.actual_sink_id)*2**52
-
         elif particle.e_num == 1:
             particle.e1 += (particle.actual_sink_t0)
             particle.e1 += (particle.actual_sink_ct)*2**20
             particle.e1 += (particle.actual_sink_status)*2**40
             particle.e1 += (particle.actual_sink_id)*2**52
-
         elif particle.e_num == 2:
             particle.e2 += (particle.actual_sink_t0)
             particle.e2 += (particle.actual_sink_ct)*2**20
             particle.e2 += (particle.actual_sink_status)*2**40
             particle.e2 += (particle.actual_sink_id)*2**52
-
         elif particle.e_num == 3:
             particle.e3 += (particle.actual_sink_t0)
             particle.e3 += (particle.actual_sink_ct)*2**20
             particle.e3 += (particle.actual_sink_status)*2**40
             particle.e3 += (particle.actual_sink_id)*2**52
-
         elif particle.e_num == 4:
             particle.e4 += (particle.actual_sink_t0)
             particle.e4 += (particle.actual_sink_ct)*2**20
             particle.e4 += (particle.actual_sink_status)*2**40
             particle.e4 += (particle.actual_sink_id)*2**52
-
         elif particle.e_num == 5:
             particle.e5 += (particle.actual_sink_t0)
             particle.e5 += (particle.actual_sink_ct)*2**20
             particle.e5 += (particle.actual_sink_status)*2**40
             particle.e5 += (particle.actual_sink_id)*2**52
-
         elif particle.e_num == 6:
             particle.e6 += (particle.actual_sink_t0)
             particle.e6 += (particle.actual_sink_ct)*2**20
             particle.e6 += (particle.actual_sink_status)*2**40
             particle.e6 += (particle.actual_sink_id)*2**52
-
         elif particle.e_num == 7:
             particle.e7 += (particle.actual_sink_t0)
             particle.e7 += (particle.actual_sink_ct)*2**20
             particle.e7 += (particle.actual_sink_status)*2**40
             particle.e7 += (particle.actual_sink_id)*2**52
-
         elif particle.e_num == 8:
             particle.e8 += (particle.actual_sink_t0)
             particle.e8 += (particle.actual_sink_ct)*2**20
             particle.e8 += (particle.actual_sink_status)*2**40
             particle.e8 += (particle.actual_sink_id)*2**52
-
         elif particle.e_num == 9:
             particle.e9 += (particle.actual_sink_t0)
             particle.e9 += (particle.actual_sink_ct)*2**20
@@ -647,11 +638,11 @@ def antibeach(particle, fieldset, time):
         particle.vc = fieldset.cnormy_rho[particle]
 
         if particle.cd < 0.1:
-            particle.uc *= -1*(particle.cd - 0.5)**2 -75*(particle.cd - 0.1)**2
-            particle.vc *= -1*(particle.cd - 0.5)**2 -75*(particle.cd - 0.1)**2
+            particle.uc *= 1*(particle.cd - 0.5)**2 +75*(particle.cd - 0.1)**2
+            particle.vc *= 1*(particle.cd - 0.5)**2 +75*(particle.cd - 0.1)**2
         else:
-            particle.uc *= -1*(particle.cd - 0.5)**2
-            particle.vc *= -1*(particle.cd - 0.5)**2
+            particle.uc *= 1*(particle.cd - 0.5)**2
+            particle.vc *= 1*(particle.cd - 0.5)**2
 
         particle.lon += particle.uc*particle.dt
         particle.lat += particle.vc*particle.dt

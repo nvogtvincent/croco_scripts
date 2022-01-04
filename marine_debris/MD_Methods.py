@@ -619,6 +619,93 @@ def release_loc_land(param, fh):
 
     return pos0
 
+def release_loc_sey(param, fh):
+    # Generates initial coordinates for particle releases at a single time
+    # frame based on the ISO codes for countries of interest. Particles are
+    # only released at least 0.5 cells away from the land mask.
+
+    ids = param['id']
+    pn  = param['pn']
+
+    # Convert pn to the number along a square
+    pn = int(np.ceil(pn**0.5))
+
+    # Firstly load the requisite fields:
+    # - rho & psi coordinates
+    # - lsm_rho mask
+    # - id_psi mask (cell ids)
+    # - coast_id mask (country codes)
+
+    with Dataset(fh['grid'], mode='r') as nc:
+        lon_psi = np.array(nc.variables['lon_psi'][:])
+        lat_psi = np.array(nc.variables['lat_psi'][:])
+
+        lon_rho = np.array(nc.variables['lon_rho'][:])
+
+        id_psi    = np.array(nc.variables['source_id_psi'][:])
+        iso_psi   = np.array(nc.variables['iso_psi'][:])
+
+    # Now find the cells matching the provided ISO codes
+    idx = np.where(np.isin(iso_psi, ids))
+
+    print()
+
+    # For cell psi[i, j], the surrounding rho cells are:
+    # rho[i, j]     (SW)
+    # rho[i, j+1]   (SE)
+    # rho[i+1, j]   (NW)
+    # rho[i+1, j+1] (NE)
+
+    # For each psi cell of interest, we are now going to:
+    # 1. Find the coordinates of the surrounding rho points
+    # 2. Find the land mask at those surrounding rho points
+    # 3. Calculate the valid part of that psi cell to populate
+    # 4. Calculate the coordinates of the resulting particles
+
+    # Firstly calculate the basic particle grid
+    dX = lon_rho[1] - lon_rho[0]  # Grid spacing
+    dx = dX/pn                    # Particle spacing
+    gx = gy = np.linspace((-dX/2 + dx/2), (dX/2 - dx/2), num=pn)
+    gridx, gridy = [grid.flatten() for grid in np.meshgrid(gx, gy)]
+
+    nl  = idx[0].shape[0]  # Number of locations
+
+    lon_out = np.array([], dtype=np.float64)
+    lat_out = np.array([], dtype=np.float64)
+    id_out  = np.array([], dtype=np.int32)
+    iso_out  = np.array([], dtype=np.int16)
+
+    for loc in range(nl):
+        loc_yidx = idx[0][loc]
+        loc_xidx = idx[1][loc]
+
+        loc_y = lat_psi[loc_yidx]
+        loc_x = lon_psi[loc_xidx]
+
+        loc_id   = id_psi[loc_yidx, loc_xidx]
+        loc_iso  = iso_psi[loc_yidx, loc_xidx]
+
+        lon_out = np.append(lon_out, gridx + loc_x)
+        lat_out = np.append(lat_out, gridy + loc_y)
+        iso_out = np.append(iso_out, np.ones(np.shape(gridx),
+                                             dtype=np.int16)*loc_iso)
+        id_out = np.append(id_out, np.ones(np.shape(gridx),
+                                           dtype=np.int32)*loc_id)
+
+    # Now distribute trajectories across processes
+    # proc_out = np.repeat(np.arange(param['nproc'],
+    #                                dtype=(np.int16 if param['nproc'] > 123 else np.int8)),
+    #                      int(np.ceil(len(id_out)/param['nproc'])))
+    # proc_out = proc_out[:len(id_out)]
+
+
+    pos0 = {'lon': lon_out,
+            'lat': lat_out,
+            'iso': iso_out,
+            'id': id_out}
+
+    return pos0
+
 def add_times(particles, param):
     # This script takes release locations at a particular time point and
     # duplicates it across multiple times
