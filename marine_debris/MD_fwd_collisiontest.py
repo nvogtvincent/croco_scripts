@@ -246,12 +246,28 @@ else:
 
 # ADD ADDITIONAL FIELDS
 # Country identifier grid (on psi grid, nearest)
-iso_psi  = Field.from_netcdf(fh['grid'],
-                             variable='iso_psi',
-                             dimensions={'lon': 'lon_psi',
-                                         'lat': 'lat_psi'},
-                             interp_method='nearest',
-                             allow_time_extrapolation=True)
+iso_psi_all  = Field.from_netcdf(fh['grid'],
+                                 variable='iso_psi_all',
+                                 dimensions={'lon': 'lon_psi',
+                                             'lat': 'lat_psi'},
+                                 interp_method='nearest',
+                                 allow_time_extrapolation=True)
+
+# Source cell ID (on psi grid, nearest)
+source_id_psi  = Field.from_netcdf(fh['grid'],
+                                   variable='source_id_psi',
+                                   dimensions={'lon': 'lon_psi',
+                                               'lat': 'lat_psi'},
+                                   interp_method='nearest',
+                                   allow_time_extrapolation=True)
+
+# Sink cell ID (on psi grid, nearest)
+sink_id_psi  = Field.from_netcdf(fh['grid'],
+                                 variable='sink_id_psi',
+                                 dimensions={'lon': 'lon_psi',
+                                             'lat': 'lat_psi'},
+                                 interp_method='nearest',
+                                 allow_time_extrapolation=True)
 
 # Distance from nearest land point
 cdist   = Field.from_netcdf(fh['grid'],
@@ -279,7 +295,9 @@ cnormy  = Field.from_netcdf(fh['grid'],
                             mesh='spherical',
                             allow_time_extrapolation=True)
 
-fieldset.add_field(iso_psi)
+fieldset.add_field(iso_psi_all)
+fieldset.add_field(source_id_psi)
+fieldset.add_field(sink_id_psi)
 fieldset.add_field(cdist)
 fieldset.add_field(cnormx)
 fieldset.add_field(cnormy)
@@ -299,8 +317,7 @@ if param['Kh']:
     fieldset.add_constant_field('Kh_meridional', param['Kh'], mesh='spherical')
 
 # ADD MAXIMUM PARTICLE AGE (IF LIMITED AGE)
-if param['max_age']:
-    fieldset.add_constant('max_age', param['max_age']*3600*24*365.25)
+fieldset.add_constant('max_age', param['max_age']*3600*24*365)
 
 ##############################################################################
 # KERNELS                                                                    #

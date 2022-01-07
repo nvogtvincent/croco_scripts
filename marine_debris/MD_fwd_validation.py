@@ -255,15 +255,14 @@ elif param['stokes']:
 else:
     fieldset = fieldset_ocean
 
-
 # ADD ADDITIONAL FIELDS
 # Country identifier grid (on psi grid, nearest)
-iso_psi  = Field.from_netcdf(fh['grid'],
-                             variable='iso_psi',
-                             dimensions={'lon': 'lon_psi',
-                                         'lat': 'lat_psi'},
-                             interp_method='nearest',
-                             allow_time_extrapolation=True)
+iso_psi_all  = Field.from_netcdf(fh['grid'],
+                                 variable='iso_psi_all',
+                                 dimensions={'lon': 'lon_psi',
+                                             'lat': 'lat_psi'},
+                                 interp_method='nearest',
+                                 allow_time_extrapolation=True)
 
 # Source cell ID (on psi grid, nearest)
 source_id_psi  = Field.from_netcdf(fh['grid'],
@@ -307,7 +306,7 @@ cnormy  = Field.from_netcdf(fh['grid'],
                             mesh='spherical',
                             allow_time_extrapolation=True)
 
-fieldset.add_field(iso_psi)
+fieldset.add_field(iso_psi_all)
 fieldset.add_field(source_id_psi)
 fieldset.add_field(sink_id_psi)
 fieldset.add_field(cdist)
@@ -365,12 +364,6 @@ class debris(JITParticle):
                   dtype=np.int32,
                   initial=0,
                   to_write=False)
-
-    # Validity
-    valid = Variable('valid',
-                     dtype=np.int16,
-                     initial=1,
-                     to_write=True)
 
     ##########################################################################
     # PROVENANCE IDENTIFIERS #################################################
@@ -628,12 +621,6 @@ def event(particle, fieldset, time):
         # Otherwise, check if time at coast has been exceeded
         else:
             if particle.ct > 63072000:
-                if particle.e_num == 0:
-                    # Set valid status to FALSE if 2 years at coast have passed
-                    # and particle has not hit Seychelles
-
-                    particle.valid = 0
-
                 particle.delete()
 
     if save_event:

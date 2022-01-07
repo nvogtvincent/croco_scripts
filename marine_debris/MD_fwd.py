@@ -54,12 +54,12 @@ param = {# Release timing
          # Simulation parameters
          'stokes'            : True,          # Toggle to use Stokes drift
          'windage'           : True,         # Toggle to use windage
-         'fw'                : 3.0,           # Windage fraction (0.5/1.0/2.0/3.0)
+         'fw'                : 2.0,           # Windage fraction (0.5/1.0/2.0/3.0)
          'Kh'                : 10.,           # Horizontal diffusion coefficient (m2/s, 0 = off)
          'max_age'           : 10.,           # Max age (years). 0 == inf.
 
          # Runtime parameters
-         'Yend'              : y_in+10,                # Last year of simulation
+         'Yend'              : y_in+0,                # Last year of simulation
          'Mend'              : m_in   ,                # Last month
          'Dend'              : 2   ,                   # Last day (00:00, start)
          'dt_RK4'            : timedelta(minutes=30),  # RK4 time-step
@@ -80,8 +80,8 @@ param = {# Release timing
                                 'cr' : 0.25},          # Fraction entering sea
 
          # Testing parameters
-         'test'              : False,                  # Activate test mode
-         'line_rel'          : False,                  # Release particles in line
+         'test'              : True,                  # Activate test mode
+         'line_rel'          : True,                  # Release particles in line
          'dt_out'            : timedelta(minutes=60),} # Output frequency (testing only)
 
 # DIRECTORIES
@@ -160,10 +160,10 @@ if not param['test']:
 else:
     if param['line_rel']:
         particles['loc_array'] = {}
-        particles['loc_array']['lon0'] = 49.34
-        particles['loc_array']['lon1'] = 49.34
-        particles['loc_array']['lat0'] = -12.3
-        particles['loc_array']['lat1'] = -11.8
+        particles['loc_array']['lon0'] = 80.08
+        particles['loc_array']['lon1'] = 80.08
+        particles['loc_array']['lat0'] = 5.8
+        particles['loc_array']['lat1'] = 6.57
 
         particles['loc_array']['ll'] = [np.linspace(particles['loc_array']['lon0'],
                                                     particles['loc_array']['lon1'],
@@ -258,12 +258,12 @@ else:
 
 # ADD ADDITIONAL FIELDS
 # Country identifier grid (on psi grid, nearest)
-iso_psi  = Field.from_netcdf(fh['grid'],
-                             variable='iso_psi',
-                             dimensions={'lon': 'lon_psi',
-                                         'lat': 'lat_psi'},
-                             interp_method='nearest',
-                             allow_time_extrapolation=True)
+iso_psi_all  = Field.from_netcdf(fh['grid'],
+                                 variable='iso_psi_all',
+                                 dimensions={'lon': 'lon_psi',
+                                             'lat': 'lat_psi'},
+                                 interp_method='nearest',
+                                 allow_time_extrapolation=True)
 
 # Source cell ID (on psi grid, nearest)
 source_id_psi  = Field.from_netcdf(fh['grid'],
@@ -307,7 +307,7 @@ cnormy  = Field.from_netcdf(fh['grid'],
                             mesh='spherical',
                             allow_time_extrapolation=True)
 
-fieldset.add_field(iso_psi)
+fieldset.add_field(iso_psi_all)
 fieldset.add_field(source_id_psi)
 fieldset.add_field(sink_id_psi)
 fieldset.add_field(cdist)
@@ -366,12 +366,6 @@ class debris(JITParticle):
                   initial=0,
                   to_write=False)
 
-    # Validity
-    valid = Variable('valid',
-                     dtype=np.int16,
-                     initial=1,
-                     to_write=True)
-
     ##########################################################################
     # PROVENANCE IDENTIFIERS #################################################
     ##########################################################################
@@ -395,8 +389,6 @@ class debris(JITParticle):
     rp0 = Variable('rp0',
                    dtype=np.float32,
                    to_write=True)
-
-
 
     ##########################################################################
     # ANTIBEACHING VARIABLES #################################################
@@ -477,7 +469,6 @@ class debris(JITParticle):
     e18 = Variable('e18', dtype=np.int64, initial=0, to_write=True)
     e19 = Variable('e19', dtype=np.int64, initial=0, to_write=True)
 
-
 ##############################################################################
 # KERNELS ####################################################################
 ##############################################################################
@@ -489,7 +480,7 @@ def event(particle, fieldset, time):
     particle.ot += particle.dt
 
     # 2 Assess coastal status
-    particle.iso = fieldset.iso_psi[particle]
+    particle.iso = fieldset.iso_psi_all[particle]
 
     if particle.iso > 0:
 
@@ -544,12 +535,6 @@ def event(particle, fieldset, time):
         # Otherwise, check if time at coast has been exceeded
         else:
             if particle.ct > 63072000:
-                if particle.e_num == 0:
-                    # Set valid status to FALSE if 2 years at coast have passed
-                    # and particle has not hit Seychelles
-
-                    particle.valid = 0
-
                 particle.delete()
 
     if save_event:
@@ -700,9 +685,12 @@ def antibeach(particle, fieldset, time):
         particle.uc = fieldset.cnormx_rho[particle]
         particle.vc = fieldset.cnormy_rho[particle]
 
-        if particle.cd < 0.1:
-            particle.uc *= 1*(particle.cd - 0.5)**2 +75*(particle.cd - 0.1)**2
-            particle.vc *= 1*(particle.cd - 0.5)**2 +75*(particle.cd - 0.1)**2
+        if particle.cd <= 0:
+            particle.uc *= 4 # Rapid acceleration at up to 4m/s away to sea (exceeds all wind + ocean)
+            particle.vc *= 4 # Rapid acceleration at up to 4m/s away to sea (exceeds all wind + ocean)
+        elif particle.cd < 0.1:
+            particle.uc *= 1*(particle.cd - 0.5)**2 +75*(particle.cd - 0.1)**2 # Will prevent all normal coastward velocities (< 1m/s) from beaching
+            particle.vc *= 1*(particle.cd - 0.5)**2 +75*(particle.cd - 0.1)**2 # Will prevent all normal coastward velocities (< 1m/s) from beaching
         else:
             particle.uc *= 1*(particle.cd - 0.5)**2
             particle.vc *= 1*(particle.cd - 0.5)**2
@@ -768,7 +756,8 @@ traj.export()
 
 if param['test']:
     # Set display region
-    (lon_min, lon_max, lat_min, lat_max) = (48.4, 49.5, -12.4, -11.4)
+    (lon_min, lon_max, lat_min, lat_max) = (80, 81, 5.75, 6.75)
+
 
     # Import grids
     with Dataset(fh['grid'], mode='r') as nc:
@@ -810,7 +799,7 @@ if param['test']:
     disp_coast_psi = coast_psi[imin_psi:imax_psi, jmin_psi:jmax_psi]
     disp_cdist_rho = cdist_rho[imin_rho:imax_rho, jmin_rho:jmax_rho]
 
-    with Dataset(fh['ocean'][-1], mode='r') as nc:
+    with Dataset(fh['ocean'][-4], mode='r') as nc:
         disp_u_rho   = nc.variables['uo'][0, 0,
                                           imin_rho:imax_rho,
                                           jmin_rho:jmax_rho]

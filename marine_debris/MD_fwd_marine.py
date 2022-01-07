@@ -252,12 +252,12 @@ else:
 
 # ADD ADDITIONAL FIELDS
 # Country identifier grid (on psi grid, nearest)
-iso_psi  = Field.from_netcdf(fh['grid'],
-                             variable='iso_psi',
-                             dimensions={'lon': 'lon_psi',
-                                         'lat': 'lat_psi'},
-                             interp_method='nearest',
-                             allow_time_extrapolation=True)
+iso_psi_all  = Field.from_netcdf(fh['grid'],
+                                 variable='iso_psi_all',
+                                 dimensions={'lon': 'lon_psi',
+                                             'lat': 'lat_psi'},
+                                 interp_method='nearest',
+                                 allow_time_extrapolation=True)
 
 # Source cell ID (on psi grid, nearest)
 source_id_psi  = Field.from_netcdf(fh['grid'],
@@ -301,7 +301,7 @@ cnormy  = Field.from_netcdf(fh['grid'],
                             mesh='spherical',
                             allow_time_extrapolation=True)
 
-fieldset.add_field(iso_psi)
+fieldset.add_field(iso_psi_all)
 fieldset.add_field(source_id_psi)
 fieldset.add_field(sink_id_psi)
 fieldset.add_field(cdist)
@@ -360,25 +360,29 @@ class debris(JITParticle):
                   initial=0,
                   to_write=False)
 
-    # Validity
-    valid = Variable('valid',
-                     dtype=np.int16,
-                     initial=1,
-                     to_write=True)
-
     ##########################################################################
     # PROVENANCE IDENTIFIERS #################################################
     ##########################################################################
+
+    # Source cell ID (specifically identifying source cell)
+    source_id = Variable('source_id',
+                         dtype=np.int32,
+                         to_write=True)
 
     # Source cell ID - specifically identifying source cell
     source_cell = Variable('source_cell',
                            dtype=np.int32,
                            to_write=True)
 
-    # GFW_num - Number of 1/12 cells corresponding to the GFW cell
-    gfw_num = Variable('gfw_num',
-                       dtype=np.int32,
-                       to_write=True)
+    # Source cell ID (Initial mass of plastic from direct coastal input)
+    cp0 = Variable('cp0',
+                   dtype=np.float32,
+                   to_write=True)
+
+    # Source cell ID (Initial mass of plastic from riverine input)
+    rp0 = Variable('rp0',
+                   dtype=np.float32,
+                   to_write=True)
 
     ##########################################################################
     # ANTIBEACHING VARIABLES #################################################
@@ -471,7 +475,7 @@ def event(particle, fieldset, time):
     particle.ot += particle.dt
 
     # 2 Assess coastal status
-    particle.iso = fieldset.iso_psi[particle]
+    particle.iso = fieldset.iso_psi_all[particle]
 
     if particle.iso > 0:
 
@@ -526,12 +530,6 @@ def event(particle, fieldset, time):
         # Otherwise, check if time at coast has been exceeded
         else:
             if particle.ct > 63072000:
-                if particle.e_num == 0:
-                    # Set valid status to FALSE if 2 years at coast have passed
-                    # and particle has not hit Seychelles
-
-                    particle.valid = 0
-
                 particle.delete()
 
     if save_event:
@@ -682,9 +680,12 @@ def antibeach(particle, fieldset, time):
         particle.uc = fieldset.cnormx_rho[particle]
         particle.vc = fieldset.cnormy_rho[particle]
 
-        if particle.cd < 0.1:
-            particle.uc *= 1*(particle.cd - 0.5)**2 +75*(particle.cd - 0.1)**2
-            particle.vc *= 1*(particle.cd - 0.5)**2 +75*(particle.cd - 0.1)**2
+        if particle.cd <= 0:
+            particle.uc *= 4 # Rapid acceleration at up to 4m/s away to sea (exceeds all wind + ocean)
+            particle.vc *= 4 # Rapid acceleration at up to 4m/s away to sea (exceeds all wind + ocean)
+        elif particle.cd < 0.1:
+            particle.uc *= 1*(particle.cd - 0.5)**2 +75*(particle.cd - 0.1)**2 # Will prevent all normal coastward velocities (< 1m/s) from beaching
+            particle.vc *= 1*(particle.cd - 0.5)**2 +75*(particle.cd - 0.1)**2 # Will prevent all normal coastward velocities (< 1m/s) from beaching
         else:
             particle.uc *= 1*(particle.cd - 0.5)**2
             particle.vc *= 1*(particle.cd - 0.5)**2

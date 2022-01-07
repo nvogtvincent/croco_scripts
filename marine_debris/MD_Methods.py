@@ -296,40 +296,6 @@ def release_loc_ocean(param, fh):
     gfw_uniques = np.unique(gfw_id12, return_counts=True)
     gfw_dict = dict(zip(gfw_uniques[0], gfw_uniques[1]))
 
-    # with Dataset(fh['fish'], mode='r') as nc:
-    #     lon_bnd_fsh = np.array(nc.variables['lon_bnd'][:])
-    #     lat_bnd_fsh = np.array(nc.variables['lat_bnd'][:])
-
-    #     fish_int   = np.array(nc.variables['all_A_time_integral'][:])
-
-    # # # Associate an ID to every fish cell
-    # fish_id_gfw = np.zeros_like(fish_int, dtype=np.int64)
-    # for i in range(np.shape(fish_id_gfw)[0]):
-    #     for j in range(np.shape(fish_id_gfw)[1]):
-    #         fish_id_gfw[i, j] = 1000*i + j
-
-    # # # Upscale fish grid to model resolution
-    # fish_id_ = np.kron(fish_id_gfw, np.ones((12,12), dtype=np.float32))
-
-    # # # Embed within model grid
-    # fish_id = -1*np.ones_like(id_psi)
-
-    # fsh_psi_lon = [np.where(lon_psi == lon_bnd_fsh[0] + (1/24))[0][0],
-    #                 np.where(lon_psi == lon_bnd_fsh[-1] - (1/24))[0][0]]
-    # fsh_psi_lat = [np.where(lat_psi == lat_bnd_fsh[0] + (1/24))[0][0],
-    #                 np.where(lat_psi == lat_bnd_fsh[-1] - (1/24))[0][0]]
-
-    # fish_id[fsh_psi_lat[0]:fsh_psi_lat[1]+1,
-    #         fsh_psi_lon[0]:fsh_psi_lon[1]+1] = fish_id_
-
-    # # Apply landmask
-    # fish_id[lsm_psi == 1] = -1
-
-    # ADD CODE TO COVER PARTS OF THE OCEAN IN THE MODEL BUT NOT ON GFW?
-    # OR FIND AN ALGORITHM TO GO FROM ID_PSI -> FISH_ID? !!!!
-
-    # Apply latitudinal limits
-
     # Extract cell grid indices
     idx = list(np.where(marine_release_loc == 1))
 
@@ -889,6 +855,20 @@ def gridgen(fh, dirs, param, **kwargs):
         # Now generate vectors pointing away from the coast
         cnormx, cnormy = cnorm(lsm_rho)
 
+        cdist_rho_land = distance_transform_edt(lsm_rho)
+        cnormx_supp = -np.gradient(cdist_rho_land, axis=1)
+        cnormy_supp = -np.gradient(cdist_rho_land, axis=0)
+        cnorm_supp_mag = np.sqrt(cnormx_supp**2 + cnormy_supp**2)
+        cnorm_supp_mag[cnorm_supp_mag == 0] = 1
+        cnormx_supp /= cnorm_supp_mag
+        cnormy_supp /= cnorm_supp_mag
+
+        cnormx_supp[(cnormx != 0) + (lsm_rho == 0)] = 0
+        cnormy_supp[(cnormy != 0) + (lsm_rho == 0)] = 0
+
+        cnormx += cnormx_supp
+        cnormy += cnormy_supp
+
         # Now generate plastic data if required
         if plastic:
             efs = 1/param['p_param']['l']
@@ -994,6 +974,13 @@ def gridgen(fh, dirs, param, **kwargs):
                                                         return_indices=True)
 
             iso_psi = id_coast_cells(coast_psi.astype('int16'), country_id, country_id_nearest)
+
+            # Also add land cells
+            iso_psi_land = np.copy(country_id)
+            iso_psi_land[iso_psi_land == -32768] == 0
+            iso_psi_land[lsm_psi == 0] = 0
+            iso_psi_land[iso_psi != 0] = 0
+            iso_psi_land += iso_psi
 
             ##############################################################################
             # Specifically label Seychelles coastal cells ################################
@@ -1184,6 +1171,12 @@ def gridgen(fh, dirs, param, **kwargs):
                 nc.variables['iso_psi'].standard_name = 'iso_psi'
                 nc.variables['iso_psi'][:] = iso_psi
 
+                nc.createVariable('iso_psi_all', 'i4', ('lat_psi', 'lon_psi'), zlib=True)
+                nc.variables['iso_psi_all'].long_name = 'ISO_3166-1_numeric_code_of_all_psi_cells'
+                nc.variables['iso_psi_all'].units = 'no units'
+                nc.variables['iso_psi_all'].standard_name = 'iso_psi_all'
+                nc.variables['iso_psi_all'][:] = iso_psi_land
+
                 nc.createVariable('sink_id_psi', 'i2', ('lat_psi', 'lon_psi'), zlib=True)
                 nc.variables['sink_id_psi'].long_name = 'sink_cell_id_on_psi_grid'
                 nc.variables['sink_id_psi'].units = 'no units'
@@ -1207,6 +1200,7 @@ def gridgen(fh, dirs, param, **kwargs):
                             'source_id_psi': np.array(nc.variables['source_id_psi']),
                             'sink_id_psi': np.array(nc.variables['sink_id_psi']),
                             'iso_psi': np.array(nc.variables['iso_psi']),
+                            'iso_psi_all': np.array(nc.variables['iso_psi_all']),
                             'cplastic_psi': np.array(nc.variables['cplastic_psi']),
                             'rplastic_psi': np.array(nc.variables['rplastic_psi'])}
             else:
@@ -1223,13 +1217,3 @@ def gridgen(fh, dirs, param, **kwargs):
                             'source_id_psi': np.array(nc.variables['source_id_psi'])}
 
     return grid
-
-
-
-
-
-
-# sink_id = np.zeros((n_traj, n_events), dtype=np.int64)
-# time_at_sink = np.zeros((n_traj, n_events), dtype=np.int64)
-# prior_tb = np.zeros((n_traj, n_events), dtype=np.int64)
-# prior_ts = np.zeros((n_traj, n_events), dtype=np.int64)
