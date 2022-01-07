@@ -26,7 +26,6 @@ from sys import argv
 # PARTITIONS & STARTING YEAR
 try:
     y_in = int(argv[1])
-    m_in = int(argv[2])
     tot_part = int(argv[3])
     part = int(argv[4])
 except:
@@ -40,8 +39,8 @@ except:
 param = {# Release timing
          'Ymin'              : y_in,          # First release year
          'Ymax'              : y_in,          # Last release year
-         'Mmin'              : m_in,          # First release month
-         'Mmax'              : m_in,          # Last release month
+         'Mmin'              : 1,          # First release month
+         'Mmax'              : 12,          # Last release month
          'RPM'               : 1   ,          # Releases per month
          'mode'              :'START',        # Release at END or START
 
@@ -52,7 +51,7 @@ param = {# Release timing
          # Simulation parameters
          'stokes'            : True,          # Toggle to use Stokes drift
          'windage'           : False,         # Toggle to use windage
-         'fw'                : 1.0,           # Windage fraction
+         'fw'                : 0.0,           # Windage fraction
          'Kh'                : 10.,           # Horizontal diffusion coefficient (m2/s, 0 = off)
          'max_age'           : 0,             # Max age (years). 0 == inf.
 
@@ -63,7 +62,7 @@ param = {# Release timing
          'dt_RK4'            : timedelta(minutes=30),# RK4 time-step
 
          # Output parameters
-         'dt_out'            : timedelta(hours=1),    # Output frequency
+         'dt_out'            : timedelta(hours=120),    # Output frequency
          'fn_out'            : str(y_in) + '_' + str(part) + '_SeyFwdTest.nc',  # Output filename
 
          # Partitioning
@@ -77,8 +76,8 @@ param = {# Release timing
          'p_param'           : {'l'  : 50.,            # Plastic length scale
                                 'cr' : 0.15},          # Fraction entering sea
 
-         'test'              : True,                  # Activate test mode
-         'line_rel'          : True,}                 # Release particles in line
+         'test'              : False,                  # Activate test mode
+         'line_rel'          : False,}                 # Release particles in line
 
 # DIRECTORIES
 dirs = {'script': os.path.dirname(os.path.realpath(__file__)),
@@ -196,7 +195,29 @@ interp_method = {'U' : 'linear',
 fieldset_ocean = FieldSet.from_netcdf(filenames, variables, dimensions,
                                       interp_method=interp_method)
 
-if param['stokes']:
+if param['windage']:
+    # WINDAGE (FROM ERA5) + WAVE (STOKES FROM WAVERYS W/ GLORYS12V1)
+    if param['fw'] not in [0.5, 1.0, 2.0, 3.0]:
+        raise NotImplementedError('Windage fraction not available!')
+
+    wind_fh = 'WINDWAVE' + format(int(param['fw']*10), '04') + '*'
+    vsuffix = '_windwave' + format(int(param['fw']*10), '02')
+    fh['wind'] = sorted(glob(dirs['model'] + wind_fh))
+
+    filenames = fh['wind']
+
+    variables = {'U': 'u' + vsuffix,
+                 'V': 'v' + vsuffix}
+
+    dimensions = {'U': {'lon': 'longitude', 'lat': 'latitude', 'time': 'time'},
+                  'V': {'lon': 'longitude', 'lat': 'latitude', 'time': 'time'}}
+
+    interp_method = {'U' : 'linear',
+                     'V' : 'linear'}
+
+    fieldset_windwave = FieldSet.from_netcdf(filenames, variables, dimensions,
+                                             interp_method=interp_method)
+elif param['stokes']:
     # WAVE (STOKES FROM WAVERYS W/ GLORYS12V1)
     filenames = fh['wave']
 
@@ -212,6 +233,12 @@ if param['stokes']:
     fieldset_wave = FieldSet.from_netcdf(filenames, variables, dimensions,
                                          interp_method=interp_method)
 
+
+
+if param['windage']:
+    fieldset = FieldSet(U=fieldset_ocean.U+fieldset_windwave.U,
+                        V=fieldset_ocean.V+fieldset_windwave.V)
+elif param['stokes']:
     fieldset = FieldSet(U=fieldset_ocean.U+fieldset_wave.U,
                         V=fieldset_ocean.V+fieldset_wave.V)
 else:

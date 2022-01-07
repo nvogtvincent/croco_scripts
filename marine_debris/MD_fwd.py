@@ -46,26 +46,26 @@ param = {# Release timing
 
          # Seeding strategy
          'threshold'         : 1e2,           # Minimum plastic threshold (kg)
-         'log_mult'          : 16.4,            # Log-multiplier
+         'log_mult'          : 12,            # Log-multiplier
 
          # Sink locations
          'id'                : [690],         # ISO IDs of sink countries
 
          # Simulation parameters
          'stokes'            : True,          # Toggle to use Stokes drift
-         'windage'           : False,         # Toggle to use windage
-         'fw'                : 1.0,           # Windage fraction (0.5/1.0/2.0/3.0)
+         'windage'           : True,         # Toggle to use windage
+         'fw'                : 3.0,           # Windage fraction (0.5/1.0/2.0/3.0)
          'Kh'                : 10.,           # Horizontal diffusion coefficient (m2/s, 0 = off)
          'max_age'           : 10.,           # Max age (years). 0 == inf.
 
          # Runtime parameters
-         'Yend'              : y_in+0,                # Last year of simulation
+         'Yend'              : y_in+10,                # Last year of simulation
          'Mend'              : m_in   ,                # Last month
-         'Dend'              : 10   ,                   # Last day (00:00, start)
+         'Dend'              : 2   ,                   # Last day (00:00, start)
          'dt_RK4'            : timedelta(minutes=30),  # RK4 time-step
 
          # Output parameters
-         'fn_out'            : str(y_in) + '_' + str(m_in) + '_' + str(part) + '_FwdW0010.nc',  # Output filename
+         'fn_out'            : str(y_in) + '_' + str(m_in) + '_' + str(part) + '_Fwd.nc',  # Output filename
 
          # Partitioning
          'total_partitions'  : tot_part,
@@ -80,8 +80,8 @@ param = {# Release timing
                                 'cr' : 0.25},          # Fraction entering sea
 
          # Testing parameters
-         'test'              : True,                  # Activate test mode
-         'line_rel'          : True,                  # Release particles in line
+         'test'              : False,                  # Activate test mode
+         'line_rel'          : False,                  # Release particles in line
          'dt_out'            : timedelta(minutes=60),} # Output frequency (testing only)
 
 # DIRECTORIES
@@ -206,7 +206,29 @@ interp_method = {'U' : 'linear',
 fieldset_ocean = FieldSet.from_netcdf(filenames, variables, dimensions,
                                       interp_method=interp_method)
 
-if param['stokes']:
+if param['windage']:
+    # WINDAGE (FROM ERA5) + WAVE (STOKES FROM WAVERYS W/ GLORYS12V1)
+    if param['fw'] not in [0.5, 1.0, 2.0, 3.0]:
+        raise NotImplementedError('Windage fraction not available!')
+
+    wind_fh = 'WINDWAVE' + format(int(param['fw']*10), '04') + '*'
+    vsuffix = '_windwave' + format(int(param['fw']*10), '02')
+    fh['wind'] = sorted(glob(dirs['model'] + wind_fh))
+
+    filenames = fh['wind']
+
+    variables = {'U': 'u' + vsuffix,
+                 'V': 'v' + vsuffix}
+
+    dimensions = {'U': {'lon': 'longitude', 'lat': 'latitude', 'time': 'time'},
+                  'V': {'lon': 'longitude', 'lat': 'latitude', 'time': 'time'}}
+
+    interp_method = {'U' : 'linear',
+                     'V' : 'linear'}
+
+    fieldset_windwave = FieldSet.from_netcdf(filenames, variables, dimensions,
+                                             interp_method=interp_method)
+elif param['stokes']:
     # WAVE (STOKES FROM WAVERYS W/ GLORYS12V1)
     filenames = fh['wave']
 
@@ -222,35 +244,11 @@ if param['stokes']:
     fieldset_wave = FieldSet.from_netcdf(filenames, variables, dimensions,
                                          interp_method=interp_method)
 
+
+
 if param['windage']:
-    # WINDAGE (FROM ERA5)
-    if param['fw'] not in [0.5, 1.0, 2.0, 3.0]:
-        raise NotImplementedError('Windage fraction not available!')
-
-    wind_fh = 'WIND' + format(int(param['fw']*10), '04') + '*'
-    vname = format(int(param['fw']*10), '04')
-    fh['wind'] = sorted(glob(dirs['model'] + wind_fh))
-
-    filenames = fh['wind']
-
-    variables = {'U': 'u' + vname,
-                 'V': 'v' + vname}
-
-    dimensions = {'U': {'lon': 'longitude', 'lat': 'latitude', 'time': 'time'},
-                  'V': {'lon': 'longitude', 'lat': 'latitude', 'time': 'time'}}
-
-    interp_method = {'U' : 'linear',
-                     'V' : 'linear'}
-
-    fieldset_wind = FieldSet.from_netcdf(filenames, variables, dimensions,
-                                         interp_method=interp_method)
-
-if param['windage'] and param['stokes']:
-    fieldset = FieldSet(U=fieldset_ocean.U+fieldset_wave.U+fieldset_wind.U,
-                        V=fieldset_ocean.V+fieldset_wave.V+fieldset_wind.V)
-elif param['windage']:
-    fieldset = FieldSet(U=fieldset_ocean.U+fieldset_wind.U,
-                        V=fieldset_ocean.V+fieldset_wind.V)
+    fieldset = FieldSet(U=fieldset_ocean.U+fieldset_windwave.U,
+                        V=fieldset_ocean.V+fieldset_windwave.V)
 elif param['stokes']:
     fieldset = FieldSet(U=fieldset_ocean.U+fieldset_wave.U,
                         V=fieldset_ocean.V+fieldset_wave.V)
@@ -367,6 +365,12 @@ class debris(JITParticle):
                   dtype=np.int32,
                   initial=0,
                   to_write=False)
+
+    # Validity
+    valid = Variable('valid',
+                     dtype=np.int16,
+                     initial=1,
+                     to_write=True)
 
     ##########################################################################
     # PROVENANCE IDENTIFIERS #################################################
@@ -536,6 +540,17 @@ def event(particle, fieldset, time):
         if particle.actual_sink_status > 0:
 
             save_event = True
+
+        # Otherwise, check if time at coast has been exceeded
+        else:
+            if particle.ct > 63072000:
+                if particle.e_num == 0:
+                    # Set valid status to FALSE if 2 years at coast have passed
+                    # and particle has not hit Seychelles
+
+                    particle.valid = 0
+
+                particle.delete()
 
     if save_event:
         # Save actual values
@@ -753,7 +768,7 @@ traj.export()
 
 if param['test']:
     # Set display region
-    (lon_min, lon_max, lat_min, lat_max) = (49, 50, -12.4, -11.4)
+    (lon_min, lon_max, lat_min, lat_max) = (48.4, 49.5, -12.4, -11.4)
 
     # Import grids
     with Dataset(fh['grid'], mode='r') as nc:

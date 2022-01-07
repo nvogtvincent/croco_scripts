@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-This script tracks particles arriving at a country backward in time using the
+This script tracks particles arriving at a country forward in time using the
 CMEMS GLORYS12V1 reanalysis (current and Stokes drift)
 @author: Noam Vogt-Vincent
 """
@@ -26,10 +26,12 @@ from sys import argv
 # PARTITIONS & STARTING YEAR
 try:
     y_in = int(argv[1])
-    tot_part = int(argv[2])
-    part = int(argv[3])
+    m_in = int(argv[2])
+    tot_part = int(argv[3])
+    part = int(argv[4])
 except:
     y_in = 2019
+    m_in = 9
     tot_part = 1
     part = 0
 
@@ -37,33 +39,33 @@ except:
 param = {# Release timing
          'Ymin'              : y_in,          # First release year
          'Ymax'              : y_in,          # Last release year
-         'Mmin'              : 9   ,          # First release month
-         'Mmax'              : 9  ,           # Last release month
+         'Mmin'              : m_in,          # First release month
+         'Mmax'              : m_in,           # Last release month
          'mode'              :'START',        # Release at END or START
          'RPM'               : 1,             # Releases per month
 
          # Seeding strategy
          'threshold'         : 1e2,           # Minimum plastic threshold (kg)
-         'log_mult'          : 16.4,             # Log-multiplier
+         'log_mult'          : 1,            # Log-multiplier
 
          # Sink locations
          'id'                : [690],         # ISO IDs of sink countries
 
          # Simulation parameters
-         'stokes'            : True,          # Toggle to use Stokes drift
-         'windage'           : False,         # Toggle to use windage
-         'fw'                : 0.0,           # Windage fraction
-         'Kh'                : 0.,            # Horizontal diffusion coefficient (m2/s, 0 = off)
-         'max_age'           : 0.049,           # Max age (years). 0 == inf.
+         'stokes'            : False,          # Toggle to use Stokes drift
+         'windage'           : False,         # Toggle to use windage (priority over stokes)
+         'fw'                : 2.0,           # Windage fraction (0.5/1.0/2.0/3.0)
+         'Kh'                : 10.,           # Horizontal diffusion coefficient (m2/s, 0 = off)
+         'max_age'           : 10.,           # Max age (years). 0 == inf.
 
          # Runtime parameters
-         'Yend'              : y_in,                   # Last year of simulation
-         'Mend'              : 9   ,                   # Last month
-         'Dend'              : 20   ,                  # Last day (00:00, start)
-         'dt_RK4'            : timedelta(minutes=45),  # RK4 time-step
+         'Yend'              : y_in+0,                # Last year of simulation
+         'Mend'              : m_in   ,                # Last month
+         'Dend'              : 2   ,                   # Last day (00:00, start)
+         'dt_RK4'            : timedelta(minutes=60),  # RK4 time-step
 
          # Output parameters
-         'fn_out'            : str(y_in) + '_' + str(part) + '_Fwd.nc',  # Output filename
+         'fn_out'            : str(y_in) + '_' + str(m_in) + '_' + str(part) + '_Fwd.nc',  # Output filename
 
          # Partitioning
          'total_partitions'  : tot_part,
@@ -78,9 +80,9 @@ param = {# Release timing
                                 'cr' : 0.25},          # Fraction entering sea
 
          # Testing parameters
-         'test'              : False,                  # Activate test mode
-         'line_rel'          : False,                  # Release particles in line
-         'dt_out'            : timedelta(minutes=60),}# Output frequency (testing only)
+         'test'              : True,                  # Activate test mode
+         'line_rel'          : True,                  # Release particles in line
+         'dt_out'            : timedelta(minutes=60),} # Output frequency (testing only)
 
 # DIRECTORIES
 dirs = {'script': os.path.dirname(os.path.realpath(__file__)),
@@ -103,6 +105,10 @@ if param['Yend'] <= 1993:
     param['Yend'] = 1993
     param['Mend'] = 1
     param['Dend'] = 2
+
+if param['Ymin'] == 1993:
+    if param['Mmin'] == 1:
+        param['delay_start'] = True
 
 if param['max_age'] == 0:
     param['max_age'] = 1e20
@@ -150,14 +156,14 @@ if not param['test']:
                                    delimiter=',',
                                    usecols=0,
                                    skiprows=1)
-    particles['loc_array'] = mdm.release_loc(param, fh)
+    particles['loc_array'] = mdm.release_loc_land(param, fh)
 else:
     if param['line_rel']:
         particles['loc_array'] = {}
-        particles['loc_array']['lon0'] = 56.25
-        particles['loc_array']['lon1'] = 56.25
-        particles['loc_array']['lat0'] = -4.7
-        particles['loc_array']['lat1'] = -3.7
+        particles['loc_array']['lon0'] = 49.34
+        particles['loc_array']['lon1'] = 49.34
+        particles['loc_array']['lat0'] = -12.3
+        particles['loc_array']['lat1'] = -11.8
 
         particles['loc_array']['ll'] = [np.linspace(particles['loc_array']['lon0'],
                                                     particles['loc_array']['lon1'],
@@ -200,7 +206,29 @@ interp_method = {'U' : 'linear',
 fieldset_ocean = FieldSet.from_netcdf(filenames, variables, dimensions,
                                       interp_method=interp_method)
 
-if param['stokes']:
+if param['windage']:
+    # WINDAGE (FROM ERA5) + WAVE (STOKES FROM WAVERYS W/ GLORYS12V1)
+    if param['fw'] not in [0.5, 1.0, 2.0, 3.0]:
+        raise NotImplementedError('Windage fraction not available!')
+
+    wind_fh = 'WINDWAVE' + format(int(param['fw']*10), '04') + '*'
+    vsuffix = '_windwave' + format(int(param['fw']*10), '02')
+    fh['wind'] = sorted(glob(dirs['model'] + wind_fh))
+
+    filenames = fh['wind']
+
+    variables = {'U': 'u' + vsuffix,
+                 'V': 'v' + vsuffix}
+
+    dimensions = {'U': {'lon': 'longitude', 'lat': 'latitude', 'time': 'time'},
+                  'V': {'lon': 'longitude', 'lat': 'latitude', 'time': 'time'}}
+
+    interp_method = {'U' : 'linear',
+                     'V' : 'linear'}
+
+    fieldset_windwave = FieldSet.from_netcdf(filenames, variables, dimensions,
+                                             interp_method=interp_method)
+elif param['stokes']:
     # WAVE (STOKES FROM WAVERYS W/ GLORYS12V1)
     filenames = fh['wave']
 
@@ -216,10 +244,17 @@ if param['stokes']:
     fieldset_wave = FieldSet.from_netcdf(filenames, variables, dimensions,
                                          interp_method=interp_method)
 
+
+
+if param['windage']:
+    fieldset = FieldSet(U=fieldset_ocean.U+fieldset_windwave.U,
+                        V=fieldset_ocean.V+fieldset_windwave.V)
+elif param['stokes']:
     fieldset = FieldSet(U=fieldset_ocean.U+fieldset_wave.U,
                         V=fieldset_ocean.V+fieldset_wave.V)
 else:
     fieldset = fieldset_ocean
+
 
 # ADD ADDITIONAL FIELDS
 # Country identifier grid (on psi grid, nearest)
@@ -311,25 +346,31 @@ class debris(JITParticle):
     iso = Variable('iso',
                    dtype=np.int32,
                    initial=0,
-                   to_write=True)
+                   to_write=False)
 
     # Sink ID of current cell (>0 if in specific sink cell)
     sink_id = Variable('sink_id',
                    dtype=np.int16,
                    initial=0,
-                   to_write=True)
+                   to_write=False)
 
     # Time at sea (Total time since release)
     ot  = Variable('ot',
                    dtype=np.int32,
                    initial=0,
-                   to_write=True)
+                   to_write=False)
 
     # Time at coast (Time time spent in coastal cells)
     ct = Variable('ct',
                   dtype=np.int32,
                   initial=0,
-                  to_write=True)
+                  to_write=False)
+
+    # Validity
+    valid = Variable('valid',
+                     dtype=np.int16,
+                     initial=1,
+                     to_write=True)
 
     ##########################################################################
     # PROVENANCE IDENTIFIERS #################################################
@@ -338,17 +379,24 @@ class debris(JITParticle):
     # Source cell ID (specifically identifying source cell)
     source_id = Variable('source_id',
                          dtype=np.int32,
-                         to_write='once')
+                         to_write=True)
+
+    # Source cell ID - specifically identifying source cell
+    source_cell = Variable('source_cell',
+                           dtype=np.int32,
+                           to_write=True)
 
     # Source cell ID (Initial mass of plastic from direct coastal input)
     cp0 = Variable('cp0',
                    dtype=np.float32,
-                   to_write='once')
+                   to_write=True)
 
     # Source cell ID (Initial mass of plastic from riverine input)
     rp0 = Variable('rp0',
                    dtype=np.float32,
-                   to_write='once')
+                   to_write=True)
+
+
 
     ##########################################################################
     # ANTIBEACHING VARIABLES #################################################
@@ -380,25 +428,25 @@ class debris(JITParticle):
     actual_sink_status = Variable('actual_sink_status',
                                   dtype=np.int32,
                                   initial=0,
-                                  to_write=True)
+                                  to_write=False)
 
     # Sink status (memory of ID of current sink cell)
     actual_sink_id = Variable('actual_sink_id',
                               dtype=np.int32,
                               initial=0,
-                              to_write=True)
+                              to_write=False)
 
     # Sink t0 (memory of time when current sink cell was reached - in time-steps)
     actual_sink_t0 = Variable('actual_sink_t0',
                               dtype=np.int32,
                               initial=0,
-                              to_write=True)
+                              to_write=False)
 
     # Sink ct (memory of time spent in coastal cells when arriving at current sink cell - in time-steps)
     actual_sink_ct = Variable('actual_sink_ct',
                               dtype=np.int32,
                               initial=0,
-                              to_write=True)
+                              to_write=False)
 
     ##########################################################################
     # RECORD OF ALL EVENTS ###################################################
@@ -418,6 +466,16 @@ class debris(JITParticle):
     e7 = Variable('e7', dtype=np.int64, initial=0, to_write=True)
     e8 = Variable('e8', dtype=np.int64, initial=0, to_write=True)
     e9 = Variable('e9', dtype=np.int64, initial=0, to_write=True)
+    e10 = Variable('e10', dtype=np.int64, initial=0, to_write=True)
+    e11 = Variable('e11', dtype=np.int64, initial=0, to_write=True)
+    e12 = Variable('e12', dtype=np.int64, initial=0, to_write=True)
+    e13 = Variable('e13', dtype=np.int64, initial=0, to_write=True)
+    e14 = Variable('e14', dtype=np.int64, initial=0, to_write=True)
+    e15 = Variable('e15', dtype=np.int64, initial=0, to_write=True)
+    e16 = Variable('e16', dtype=np.int64, initial=0, to_write=True)
+    e17 = Variable('e17', dtype=np.int64, initial=0, to_write=True)
+    e18 = Variable('e18', dtype=np.int64, initial=0, to_write=True)
+    e19 = Variable('e19', dtype=np.int64, initial=0, to_write=True)
 
     ##########################################################################
     # TEMPORARY VARIABLES FOR TESTING ########################################
@@ -437,6 +495,17 @@ class debris(JITParticle):
     m7 = Variable('m7', dtype=np.float64, initial=0., to_write=True)
     m8 = Variable('m8', dtype=np.float64, initial=0., to_write=True)
     m9 = Variable('m9', dtype=np.float64, initial=0., to_write=True)
+    m10 = Variable('m10', dtype=np.float64, initial=0., to_write=True)
+    m11 = Variable('m11', dtype=np.float64, initial=0., to_write=True)
+    m12 = Variable('m12', dtype=np.float64, initial=0., to_write=True)
+    m13 = Variable('m13', dtype=np.float64, initial=0., to_write=True)
+    m14 = Variable('m14', dtype=np.float64, initial=0., to_write=True)
+    m15 = Variable('m15', dtype=np.float64, initial=0., to_write=True)
+    m16 = Variable('m16', dtype=np.float64, initial=0., to_write=True)
+    m17 = Variable('m17', dtype=np.float64, initial=0., to_write=True)
+    m18 = Variable('m18', dtype=np.float64, initial=0., to_write=True)
+    m19 = Variable('m19', dtype=np.float64, initial=0., to_write=True)
+
 
 ##############################################################################
 # KERNELS ####################################################################
@@ -471,10 +540,31 @@ def testing_mass(particle, fieldset, time):
             particle.m8 += particle.mass*particle.dt*ll
         elif particle.e_num == 9:
             particle.m9 += particle.mass*particle.dt*ll
+        elif particle.e_num == 10:
+            particle.m10 += particle.mass*particle.dt*ll
+        elif particle.e_num == 11:
+            particle.m11 += particle.mass*particle.dt*ll
+        elif particle.e_num == 12:
+            particle.m12 += particle.mass*particle.dt*ll
+        elif particle.e_num == 13:
+            particle.m13 += particle.mass*particle.dt*ll
+        elif particle.e_num == 14:
+            particle.m14 += particle.mass*particle.dt*ll
+        elif particle.e_num == 15:
+            particle.m15 += particle.mass*particle.dt*ll
+        elif particle.e_num == 16:
+            particle.m16 += particle.mass*particle.dt*ll
+        elif particle.e_num == 17:
+            particle.m17 += particle.mass*particle.dt*ll
+        elif particle.e_num == 18:
+            particle.m18 += particle.mass*particle.dt*ll
+        elif particle.e_num == 19:
+            particle.m19 += particle.mass*particle.dt*ll
     elif particle.iso > 0:
         particle.mass -= particle.mass*particle.dt*ll
     else:
         particle.mass -= particle.mass*particle.dt*ls
+
 
 # Controller for managing particle events
 def event(particle, fieldset, time):
@@ -499,7 +589,6 @@ def event(particle, fieldset, time):
     # 3 Manage particle event if relevant
     save_event = False
     new_event = False
-    delete_particle = False
 
     # Trigger event if particle is within selected sink site
     if particle.sink_id > 0:
@@ -536,6 +625,17 @@ def event(particle, fieldset, time):
 
             save_event = True
 
+        # Otherwise, check if time at coast has been exceeded
+        else:
+            if particle.ct > 63072000:
+                if particle.e_num == 0:
+                    # Set valid status to FALSE if 2 years at coast have passed
+                    # and particle has not hit Seychelles
+
+                    particle.valid = 0
+
+                particle.delete()
+
     if save_event:
         # Save actual values
         # Unfortunately, due to the limited functions allowed in parcels, this
@@ -546,60 +646,101 @@ def event(particle, fieldset, time):
             particle.e0 += (particle.actual_sink_ct)*2**20
             particle.e0 += (particle.actual_sink_status)*2**40
             particle.e0 += (particle.actual_sink_id)*2**52
-
         elif particle.e_num == 1:
             particle.e1 += (particle.actual_sink_t0)
             particle.e1 += (particle.actual_sink_ct)*2**20
             particle.e1 += (particle.actual_sink_status)*2**40
             particle.e1 += (particle.actual_sink_id)*2**52
-
         elif particle.e_num == 2:
             particle.e2 += (particle.actual_sink_t0)
             particle.e2 += (particle.actual_sink_ct)*2**20
             particle.e2 += (particle.actual_sink_status)*2**40
             particle.e2 += (particle.actual_sink_id)*2**52
-
         elif particle.e_num == 3:
             particle.e3 += (particle.actual_sink_t0)
             particle.e3 += (particle.actual_sink_ct)*2**20
             particle.e3 += (particle.actual_sink_status)*2**40
             particle.e3 += (particle.actual_sink_id)*2**52
-
         elif particle.e_num == 4:
             particle.e4 += (particle.actual_sink_t0)
             particle.e4 += (particle.actual_sink_ct)*2**20
             particle.e4 += (particle.actual_sink_status)*2**40
             particle.e4 += (particle.actual_sink_id)*2**52
-
         elif particle.e_num == 5:
             particle.e5 += (particle.actual_sink_t0)
             particle.e5 += (particle.actual_sink_ct)*2**20
             particle.e5 += (particle.actual_sink_status)*2**40
             particle.e5 += (particle.actual_sink_id)*2**52
-
         elif particle.e_num == 6:
             particle.e6 += (particle.actual_sink_t0)
             particle.e6 += (particle.actual_sink_ct)*2**20
             particle.e6 += (particle.actual_sink_status)*2**40
             particle.e6 += (particle.actual_sink_id)*2**52
-
         elif particle.e_num == 7:
             particle.e7 += (particle.actual_sink_t0)
             particle.e7 += (particle.actual_sink_ct)*2**20
             particle.e7 += (particle.actual_sink_status)*2**40
             particle.e7 += (particle.actual_sink_id)*2**52
-
         elif particle.e_num == 8:
             particle.e8 += (particle.actual_sink_t0)
             particle.e8 += (particle.actual_sink_ct)*2**20
             particle.e8 += (particle.actual_sink_status)*2**40
             particle.e8 += (particle.actual_sink_id)*2**52
-
         elif particle.e_num == 9:
             particle.e9 += (particle.actual_sink_t0)
             particle.e9 += (particle.actual_sink_ct)*2**20
             particle.e9 += (particle.actual_sink_status)*2**40
             particle.e9 += (particle.actual_sink_id)*2**52
+        elif particle.e_num == 10:
+            particle.e10 += (particle.actual_sink_t0)
+            particle.e10 += (particle.actual_sink_ct)*2**20
+            particle.e10 += (particle.actual_sink_status)*2**40
+            particle.e10 += (particle.actual_sink_id)*2**52
+        elif particle.e_num == 11:
+            particle.e11 += (particle.actual_sink_t0)
+            particle.e11 += (particle.actual_sink_ct)*2**20
+            particle.e11 += (particle.actual_sink_status)*2**40
+            particle.e11 += (particle.actual_sink_id)*2**52
+        elif particle.e_num == 12:
+            particle.e12 += (particle.actual_sink_t0)
+            particle.e12 += (particle.actual_sink_ct)*2**20
+            particle.e12 += (particle.actual_sink_status)*2**40
+            particle.e12 += (particle.actual_sink_id)*2**52
+        elif particle.e_num == 13:
+            particle.e13 += (particle.actual_sink_t0)
+            particle.e13 += (particle.actual_sink_ct)*2**20
+            particle.e13 += (particle.actual_sink_status)*2**40
+            particle.e13 += (particle.actual_sink_id)*2**52
+        elif particle.e_num == 14:
+            particle.e14 += (particle.actual_sink_t0)
+            particle.e14 += (particle.actual_sink_ct)*2**20
+            particle.e14 += (particle.actual_sink_status)*2**40
+            particle.e14 += (particle.actual_sink_id)*2**52
+        elif particle.e_num == 15:
+            particle.e15 += (particle.actual_sink_t0)
+            particle.e15 += (particle.actual_sink_ct)*2**20
+            particle.e15 += (particle.actual_sink_status)*2**40
+            particle.e15 += (particle.actual_sink_id)*2**52
+        elif particle.e_num == 16:
+            particle.e16 += (particle.actual_sink_t0)
+            particle.e16 += (particle.actual_sink_ct)*2**20
+            particle.e16 += (particle.actual_sink_status)*2**40
+            particle.e16 += (particle.actual_sink_id)*2**52
+        elif particle.e_num == 17:
+            particle.e17 += (particle.actual_sink_t0)
+            particle.e17 += (particle.actual_sink_ct)*2**20
+            particle.e17 += (particle.actual_sink_status)*2**40
+            particle.e17 += (particle.actual_sink_id)*2**52
+        elif particle.e_num == 18:
+            particle.e18 += (particle.actual_sink_t0)
+            particle.e18 += (particle.actual_sink_ct)*2**20
+            particle.e18 += (particle.actual_sink_status)*2**40
+            particle.e18 += (particle.actual_sink_id)*2**52
+        elif particle.e_num == 19:
+            particle.e19 += (particle.actual_sink_t0)
+            particle.e19 += (particle.actual_sink_ct)*2**20
+            particle.e19 += (particle.actual_sink_status)*2**40
+            particle.e19 += (particle.actual_sink_id)*2**52
 
             particle.delete() # Delete particle, since no more sinks can be saved
 
@@ -644,15 +785,14 @@ def antibeach(particle, fieldset, time):
         particle.vc = fieldset.cnormy_rho[particle]
 
         if particle.cd < 0.1:
-            particle.uc *= -1*(particle.cd - 0.5)**2 -75*(particle.cd - 0.1)**2
-            particle.vc *= -1*(particle.cd - 0.5)**2 -75*(particle.cd - 0.1)**2
+            particle.uc *= 1*(particle.cd - 0.5)**2 +75*(particle.cd - 0.1)**2
+            particle.vc *= 1*(particle.cd - 0.5)**2 +75*(particle.cd - 0.1)**2
         else:
-            particle.uc *= -1*(particle.cd - 0.5)**2
-            particle.vc *= -1*(particle.cd - 0.5)**2
+            particle.uc *= 1*(particle.cd - 0.5)**2
+            particle.vc *= 1*(particle.cd - 0.5)**2
 
         particle.lon += particle.uc*particle.dt
         particle.lat += particle.vc*particle.dt
-
 
 
 def periodicBC(particle, fieldset, time):
@@ -679,20 +819,18 @@ pset = ParticleSet.from_list(fieldset=fieldset,
                              time = particles['pos']['time'],
                              rp0  = particles['pos']['rp0'],
                              cp0  = particles['pos']['cp0'],
-                             source_id = particles['pos']['iso'])
+                             source_id = particles['pos']['iso'],
+                             source_cell = particles['pos']['id'])
 
 print(str(len(particles['pos']['time'])) + ' particles released!')
 
-if param['test']:
-    traj = pset.ParticleFile(name=fh['traj'], outputdt=param['dt_out'])
-else:
-    traj = pset.ParticleFile(name=fh['traj'], write_ondelete=True)
+traj = pset.ParticleFile(name=fh['traj'], outputdt=param['dt_out'])
 
 kernels = (pset.Kernel(AdvectionRK4) +
            pset.Kernel(periodicBC) +
            pset.Kernel(antibeach) +
-           pset.Kernel(event) +
-           pset.Kernel(testing_mass))
+           pset.Kernel(testing_mass) +
+           pset.Kernel(event))
 
 if param['Kh']:
     kernels += pset.Kernel(DiffusionUniformKh)
@@ -712,7 +850,7 @@ traj.export()
 
 if param['test']:
     # Set display region
-    (lon_min, lon_max, lat_min, lat_max) = (54.5, 56.5, -5.5, -3.5)
+    (lon_min, lon_max, lat_min, lat_max) = (48.4, 49.5, -12.4, -11.4)
 
     # Import grids
     with Dataset(fh['grid'], mode='r') as nc:

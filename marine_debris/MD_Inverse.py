@@ -23,14 +23,15 @@ from sys import argv
 # DIRECTORIES & PARAMETERS                                                   #
 ##############################################################################
 
-# START YEAR
-y_in = int(argv[1])
-
-# # PARTITIONS
+# PARTITIONS & STARTING YEAR
 try:
-    tot_part = int(argv[2])
-    part = int(argv[3])
+    y_in = int(argv[1])
+    m_in = int(argv[2])
+    tot_part = int(argv[3])
+    part = int(argv[4])
 except:
+    y_in = 2019
+    m_in = 9
     tot_part = 1
     part = 0
 
@@ -38,7 +39,7 @@ except:
 param = {# Release timing
          'Ymin'              : y_in,          # First release year
          'Ymax'              : y_in,          # Last release year
-         'Mmin'              : 1   ,          # First release month
+         'Mmin'              : 12   ,          # First release month
          'Mmax'              : 12  ,          # Last release month
          'RPM'               : 1   ,          # Releases per month
          'mode'              :'START',        # Release at END or START
@@ -49,19 +50,19 @@ param = {# Release timing
 
          # Simulation parameters
          'stokes'            : True,          # Toggle to use Stokes drift
-         'windage'           : False,         # Toggle to use windage
-         'fw'                : 0.0,           # Windage fraction
+         'windage'           : True,         # Toggle to use windage
+         'fw'                : 1.0,           # Windage fraction
          'max_age'           : 0,             # Max age (years). 0 == inf.
 
          # Runtime parameters
-         'Yend'              : 1993,                 # Last year of simulation
-         'Mend'              : 1   ,                    # Last month
-         'Dend'              : 2   ,                    # Last day (00:00, start)
+         'Yend'              : 2019,                 # Last year of simulation
+         'Mend'              : 11   ,                    # Last month
+         'Dend'              : 1   ,                    # Last day (00:00, start)
          'dt_RK4'            : timedelta(minutes=-30),  # RK4 time-step
 
          # Output parameters
-         'dt_out'            : timedelta(hours=120),    # Output frequency
-         'fn_out'            : str(y_in) + '_' + str(part) + '_SeyBwd.nc',  # Output filename
+         'dt_out'            : timedelta(hours=1),    # Output frequency
+         'fn_out'            : str(y_in) + '_' + str(part) + '_SeyBwdWind.nc',  # Output filename
 
          # Partitioning
          'total_partitions'  : tot_part,
@@ -74,8 +75,8 @@ param = {# Release timing
          'p_param'           : {'l'  : 50.,            # Plastic length scale
                                 'cr' : 0.15},          # Fraction entering sea
 
-         'test'              : False,                  # Activate test mode
-         'line_rel'          : False,}                 # Release particles in line
+         'test'              : True,                  # Activate test mode
+         'line_rel'          : True,}                 # Release particles in line
 
 # DIRECTORIES
 dirs = {'script': os.path.dirname(os.path.realpath(__file__)),
@@ -136,7 +137,7 @@ particles = {'time_array' : mdm.release_time(param, mode=param['mode'])}
 
 # Calculate the locations, ids, procs for particle releases
 if not param['test']:
-    particles['loc_array'] = mdm.release_loc(param, fh)
+    particles['loc_array'] = mdm.release_loc_sey(param, fh)
 else:
     if param['line_rel']:
         particles['loc_array'] = {}

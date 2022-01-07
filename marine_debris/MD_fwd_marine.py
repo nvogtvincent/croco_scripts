@@ -201,7 +201,29 @@ interp_method = {'U' : 'linear',
 fieldset_ocean = FieldSet.from_netcdf(filenames, variables, dimensions,
                                       interp_method=interp_method)
 
-if param['stokes']:
+if param['windage']:
+    # WINDAGE (FROM ERA5) + WAVE (STOKES FROM WAVERYS W/ GLORYS12V1)
+    if param['fw'] not in [0.5, 1.0, 2.0, 3.0]:
+        raise NotImplementedError('Windage fraction not available!')
+
+    wind_fh = 'WINDWAVE' + format(int(param['fw']*10), '04') + '*'
+    vsuffix = '_windwave' + format(int(param['fw']*10), '02')
+    fh['wind'] = sorted(glob(dirs['model'] + wind_fh))
+
+    filenames = fh['wind']
+
+    variables = {'U': 'u' + vsuffix,
+                 'V': 'v' + vsuffix}
+
+    dimensions = {'U': {'lon': 'longitude', 'lat': 'latitude', 'time': 'time'},
+                  'V': {'lon': 'longitude', 'lat': 'latitude', 'time': 'time'}}
+
+    interp_method = {'U' : 'linear',
+                     'V' : 'linear'}
+
+    fieldset_windwave = FieldSet.from_netcdf(filenames, variables, dimensions,
+                                             interp_method=interp_method)
+elif param['stokes']:
     # WAVE (STOKES FROM WAVERYS W/ GLORYS12V1)
     filenames = fh['wave']
 
@@ -217,6 +239,12 @@ if param['stokes']:
     fieldset_wave = FieldSet.from_netcdf(filenames, variables, dimensions,
                                          interp_method=interp_method)
 
+
+
+if param['windage']:
+    fieldset = FieldSet(U=fieldset_ocean.U+fieldset_windwave.U,
+                        V=fieldset_ocean.V+fieldset_windwave.V)
+elif param['stokes']:
     fieldset = FieldSet(U=fieldset_ocean.U+fieldset_wave.U,
                         V=fieldset_ocean.V+fieldset_wave.V)
 else:
@@ -331,6 +359,12 @@ class debris(JITParticle):
                   dtype=np.int32,
                   initial=0,
                   to_write=False)
+
+    # Validity
+    valid = Variable('valid',
+                     dtype=np.int16,
+                     initial=1,
+                     to_write=True)
 
     ##########################################################################
     # PROVENANCE IDENTIFIERS #################################################
@@ -488,6 +522,17 @@ def event(particle, fieldset, time):
         if particle.actual_sink_status > 0:
 
             save_event = True
+
+        # Otherwise, check if time at coast has been exceeded
+        else:
+            if particle.ct > 63072000:
+                if particle.e_num == 0:
+                    # Set valid status to FALSE if 2 years at coast have passed
+                    # and particle has not hit Seychelles
+
+                    particle.valid = 0
+
+                particle.delete()
 
     if save_event:
         # Save actual values
