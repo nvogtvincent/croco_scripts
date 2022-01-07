@@ -977,7 +977,7 @@ def gridgen(fh, dirs, param, **kwargs):
 
             # Also add land cells
             iso_psi_land = np.copy(country_id)
-            iso_psi_land[iso_psi_land == -32768] == 0
+            iso_psi_land[iso_psi_land == -32768] = 0
             iso_psi_land[lsm_psi == 0] = 0
             iso_psi_land[iso_psi != 0] = 0
             iso_psi_land += iso_psi

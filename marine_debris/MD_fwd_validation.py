@@ -52,14 +52,14 @@ param = {# Release timing
          'id'                : [690],         # ISO IDs of sink countries
 
          # Simulation parameters
-         'stokes'            : False,          # Toggle to use Stokes drift
+         'stokes'            : True,          # Toggle to use Stokes drift
          'windage'           : False,         # Toggle to use windage (priority over stokes)
          'fw'                : 2.0,           # Windage fraction (0.5/1.0/2.0/3.0)
          'Kh'                : 10.,           # Horizontal diffusion coefficient (m2/s, 0 = off)
          'max_age'           : 10.,           # Max age (years). 0 == inf.
 
          # Runtime parameters
-         'Yend'              : y_in+0,                # Last year of simulation
+         'Yend'              : y_in+10,                # Last year of simulation
          'Mend'              : m_in   ,                # Last month
          'Dend'              : 2   ,                   # Last day (00:00, start)
          'dt_RK4'            : timedelta(minutes=60),  # RK4 time-step
@@ -566,7 +566,7 @@ def event(particle, fieldset, time):
     particle.ot += particle.dt
 
     # 2 Assess coastal status
-    particle.iso = fieldset.iso_psi[particle]
+    particle.iso = fieldset.iso_psi_all[particle]
 
     if particle.iso > 0:
 
@@ -771,15 +771,31 @@ def antibeach(particle, fieldset, time):
         particle.uc = fieldset.cnormx_rho[particle]
         particle.vc = fieldset.cnormy_rho[particle]
 
-        if particle.cd < 0.1:
-            particle.uc *= 1*(particle.cd - 0.5)**2 +75*(particle.cd - 0.1)**2
-            particle.vc *= 1*(particle.cd - 0.5)**2 +75*(particle.cd - 0.1)**2
+        if particle.cd <= 0:
+            particle.uc *= 3 # Rapid acceleration at 3m/s away to sea (exceeds all wind + ocean)
+            particle.vc *= 3 # Rapid acceleration at 3m/s away to sea (exceeds all wind + ocean)
+        elif particle.cd < 0.1:
+            particle.uc *= 1*(particle.cd - 0.5)**2 +75*(particle.cd - 0.1)**2 # Will prevent all normal coastward velocities (< 1m/s) from beaching
+            particle.vc *= 1*(particle.cd - 0.5)**2 +75*(particle.cd - 0.1)**2 # Will prevent all normal coastward velocities (< 1m/s) from beaching
         else:
             particle.uc *= 1*(particle.cd - 0.5)**2
             particle.vc *= 1*(particle.cd - 0.5)**2
 
         particle.lon += particle.uc*particle.dt
         particle.lat += particle.vc*particle.dt
+
+
+def periodicBC(particle, fieldset, time):
+    # Move the particle across the periodic boundary
+    if particle.lon < fieldset.halo_west:
+        particle.lon += fieldset.halo_east - fieldset.halo_west
+    elif particle.lon > fieldset.halo_east:
+        particle.lon -= fieldset.halo_east - fieldset.halo_west
+
+
+def deleteParticle(particle, fieldset, time):
+    #  Recovery kernel to delete a particle if an error occurs
+    particle.delete()
 
 
 def periodicBC(particle, fieldset, time):
@@ -811,7 +827,7 @@ pset = ParticleSet.from_list(fieldset=fieldset,
 
 print(str(len(particles['pos']['time'])) + ' particles released!')
 
-traj = pset.ParticleFile(name=fh['traj'], outputdt=param['dt_out'])
+traj = pset.ParticleFile(name=fh['traj'], write_ondelete=True)
 
 kernels = (pset.Kernel(AdvectionRK4) +
            pset.Kernel(periodicBC) +

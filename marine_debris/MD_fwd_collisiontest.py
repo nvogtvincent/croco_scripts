@@ -59,7 +59,7 @@ param = {# Release timing
          'Yend'              : 2019,                 # Last year of simulation
          'Mend'              : 12   ,                # Last month
          'Dend'              : 30   ,                # Last day (00:00, start)
-         'dt_RK4'            : timedelta(minutes=30),# RK4 time-step
+         'dt_RK4'            : timedelta(minutes=60),# RK4 time-step
 
          # Output parameters
          'dt_out'            : timedelta(hours=120),    # Output frequency
@@ -362,7 +362,7 @@ class debris(JITParticle):
 
 def coast(particle, fieldset, time):
     # Keep track of the amount of time spent within a coastal cell
-    particle.cm = fieldset.iso_psi[particle]
+    particle.cm = fieldset.iso_psi_all[particle]
 
     if particle.cm > 0:
         particle.ct -= particle.dt
@@ -387,9 +387,12 @@ def antibeach(particle, fieldset, time):
         particle.uc = fieldset.cnormx_rho[particle]
         particle.vc = fieldset.cnormy_rho[particle]
 
-        if particle.cd < 0.1:
-            particle.uc *= 1*(particle.cd - 0.5)**2 +75*(particle.cd - 0.1)**2
-            particle.vc *= 1*(particle.cd - 0.5)**2 +75*(particle.cd - 0.1)**2
+        if particle.cd <= 0:
+            particle.uc *= 3 # Rapid acceleration at 3m/s away to sea (exceeds all wind + ocean)
+            particle.vc *= 3 # Rapid acceleration at 3m/s away to sea (exceeds all wind + ocean)
+        elif particle.cd < 0.1:
+            particle.uc *= 1*(particle.cd - 0.5)**2 +75*(particle.cd - 0.1)**2 # Will prevent all normal coastward velocities (< 1m/s) from beaching
+            particle.vc *= 1*(particle.cd - 0.5)**2 +75*(particle.cd - 0.1)**2 # Will prevent all normal coastward velocities (< 1m/s) from beaching
         else:
             particle.uc *= 1*(particle.cd - 0.5)**2
             particle.vc *= 1*(particle.cd - 0.5)**2

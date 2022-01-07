@@ -53,16 +53,16 @@ param = {# Release timing
 
          # Simulation parameters
          'stokes'            : True,          # Toggle to use Stokes drift
-         'windage'           : True,         # Toggle to use windage
+         'windage'           : False,         # Toggle to use windage
          'fw'                : 2.0,           # Windage fraction (0.5/1.0/2.0/3.0)
          'Kh'                : 10.,           # Horizontal diffusion coefficient (m2/s, 0 = off)
          'max_age'           : 10.,           # Max age (years). 0 == inf.
 
          # Runtime parameters
-         'Yend'              : y_in+0,                # Last year of simulation
+         'Yend'              : y_in+10,                # Last year of simulation
          'Mend'              : m_in   ,                # Last month
          'Dend'              : 2   ,                   # Last day (00:00, start)
-         'dt_RK4'            : timedelta(minutes=30),  # RK4 time-step
+         'dt_RK4'            : timedelta(minutes=60),  # RK4 time-step
 
          # Output parameters
          'fn_out'            : str(y_in) + '_' + str(m_in) + '_' + str(part) + '_Fwd.nc',  # Output filename
@@ -80,8 +80,8 @@ param = {# Release timing
                                 'cr' : 0.25},          # Fraction entering sea
 
          # Testing parameters
-         'test'              : True,                  # Activate test mode
-         'line_rel'          : True,                  # Release particles in line
+         'test'              : False,                  # Activate test mode
+         'line_rel'          : False,                  # Release particles in line
          'dt_out'            : timedelta(minutes=60),} # Output frequency (testing only)
 
 # DIRECTORIES
@@ -160,8 +160,8 @@ if not param['test']:
 else:
     if param['line_rel']:
         particles['loc_array'] = {}
-        particles['loc_array']['lon0'] = 80.08
-        particles['loc_array']['lon1'] = 80.08
+        particles['loc_array']['lon0'] = 80.084
+        particles['loc_array']['lon1'] = 80.084
         particles['loc_array']['lat0'] = 5.8
         particles['loc_array']['lat1'] = 6.57
 
@@ -686,8 +686,8 @@ def antibeach(particle, fieldset, time):
         particle.vc = fieldset.cnormy_rho[particle]
 
         if particle.cd <= 0:
-            particle.uc *= 4 # Rapid acceleration at up to 4m/s away to sea (exceeds all wind + ocean)
-            particle.vc *= 4 # Rapid acceleration at up to 4m/s away to sea (exceeds all wind + ocean)
+            particle.uc *= 3 # Rapid acceleration at 3m/s away to sea (exceeds all wind + ocean)
+            particle.vc *= 3 # Rapid acceleration at 3m/s away to sea (exceeds all wind + ocean)
         elif particle.cd < 0.1:
             particle.uc *= 1*(particle.cd - 0.5)**2 +75*(particle.cd - 0.1)**2 # Will prevent all normal coastward velocities (< 1m/s) from beaching
             particle.vc *= 1*(particle.cd - 0.5)**2 +75*(particle.cd - 0.1)**2 # Will prevent all normal coastward velocities (< 1m/s) from beaching
