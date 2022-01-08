@@ -532,11 +532,6 @@ def event(particle, fieldset, time):
 
             save_event = True
 
-        # Otherwise, check if time at coast has been exceeded
-        else:
-            if particle.ct > 63072000:
-                particle.delete()
-
     if save_event:
         # Save actual values
         # Unfortunately, due to the limited functions allowed in parcels, this
