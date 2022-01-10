@@ -26,22 +26,31 @@ from netCDF4 import Dataset
 from numba import njit
 from psutil import virtual_memory
 from glob import glob
+from sys import argv
 
 
 ###############################################################################
 # Parameters ##################################################################
 ###############################################################################
 
+try:
+    lb_d = int(argv[1])
+    ls_d = int(argv[2])
+except:
+    print('USING DEFAULT PARAMETERS!')
+    lb_d = 60
+    ls_d = 3650
+
 # PARAMETERS
 param = {'grid_res': 1,                          # Grid resolution in degrees
          'lon_range': [-180, 180],                 # Longitude range for output
          'lat_range': [-90, 90],                   # Latitude range for output
 
-         'lb': 60,                                 # Days
-         'ls': 3650,                               # Days
+         'lb': lb_d,                                 # Days
+         'ls': ls_d,                               # Days
 
          'days_per_obs': 5,                        # Days represented by each obs
-         'percentile': 90,}
+         'percentile': [0, 5, 10, 50, 90, 95, 100],}
 
 # DIRECTORIES
 dirs = {'script': os.path.dirname(os.path.realpath(__file__)) + '/../',
@@ -51,7 +60,7 @@ dirs = {'script': os.path.dirname(os.path.realpath(__file__)) + '/../',
 # FILE HANDLES
 fh = {'traj': sorted(glob(dirs['traj'] + '*SeyBwd.nc')),
       'fig': dirs['fig'] + 'b' + str(param['lb']) +
-      '_s' + str(param['ls']) + '_p' + str(param['percentile'])}
+      '_s' + str(param['ls'])}
 
 red_mem = 100 # (workaround for HPC)
 param['lb'] = 1/(3600*24*param['lb'])
@@ -148,24 +157,28 @@ def calc_loss(lon_bnd, lat_bnd, mass_bnd, ot_bnd, ct_bnd, param, fh):
             hist_grid_ct += np.histogramdd(np.array([data[1], data[0], ct]).T,
                                            (lat_bnd, lon_bnd, ct_bnd))[0].astype(np.int32)
 
+        print(str(fh_num+1) + '/' + str(len(fh['traj'])) + ' gridded.')
+
     # Finally, calculate the specified percentile
     def find_percentile(lon_bnd, lat_bnd, val_bnd, grid_in, percentile):
         val_mp = 0.5*(val_bnd[1:] + val_bnd[:-1])
-        grid = np.ones(np.shape(grid_in)[:2])
+        grid = np.ones((np.shape(grid_in)[0], np.shape(grid_in)[1], len(percentile)))
+        # grid = np.ones(np.shape(grid_in)[:2])
 
         for lat_idx in range(len(lat_bnd)-1):
             for lon_idx in range(len(lon_bnd)-1):
-                hist = grid_in[lat_idx, lon_idx, :]
-                if np.sum(hist) > 0:
-                    grid[lat_idx, lon_idx] = np.percentile(np.repeat(val_mp, hist), percentile)
-                else:
-                    grid[lat_idx, lon_idx] = -1
+                for pct_idx in range(len(percentile)):
+                    hist = grid_in[lat_idx, lon_idx, :]
+                    if np.sum(hist) > 0:
+                        grid[lat_idx, lon_idx, pct_idx] = np.percentile(np.repeat(val_mp, hist), percentile[pct_idx])
+                    else:
+                        grid[lat_idx, lon_idx, pct_idx] = -1
 
         return np.ma.masked_where(grid < 0, grid)
 
     grid_massloss = find_percentile(lon_bnd, lat_bnd, mass_bnd, hist_grid_massloss, param['percentile'])
-    grid_ot = find_percentile(lon_bnd, lat_bnd, ot_bnd, hist_grid_ot, 100-param['percentile'])
-    grid_ct = find_percentile(lon_bnd, lat_bnd, ct_bnd, hist_grid_ct, 100-param['percentile'])
+    grid_ot = find_percentile(lon_bnd, lat_bnd, ot_bnd, hist_grid_ot, param['percentile'])
+    grid_ct = find_percentile(lon_bnd, lat_bnd, ct_bnd, hist_grid_ct, param['percentile'])
 
     return grid_massloss, grid_ot, grid_ct
 
@@ -203,127 +216,122 @@ if __name__ == '__main__':
 
     print('Calculation complete')
 
-
     # Plotting loss
-    f, ax = plt.subplots(1, 1, figsize=(19, 10),
-                         subplot_kw={'projection': ccrs.Robinson(central_longitude=60)})
+    for pct_idx, pct in enumerate(param['percentile']):
+        f, ax = plt.subplots(1, 1, figsize=(19, 10),
+                             subplot_kw={'projection': ccrs.Robinson(central_longitude=60)})
 
-    f.subplots_adjust(hspace=0, wspace=0, top=0.925, left=0.1)
-    ax.set_global()
-    ax.set_aspect(1)
+        f.subplots_adjust(hspace=0, wspace=0, top=0.925, left=0.1)
+        ax.set_global()
+        ax.set_aspect(1)
 
-    # Set up the colorbar
-    pos_cax = f.add_axes([ax.get_position().x1+0.01,ax.get_position().y0-0.025,0.015,ax.get_position().height+0.05])
+        # Set up the colorbar
+        pos_cax = f.add_axes([ax.get_position().x1+0.01,ax.get_position().y0-0.025,0.015,ax.get_position().height+0.05])
 
-    # Plot the colormesh
-    cmap = cmr.fall_r
-    # cmaplist = [cmap(i) for i in range(cmap.N)]
-    # cmap = colors.LinearSegmentedColormap.from_list('dense_sq', cmaplist, cmap.N)
-    # cmap_bounds = np.linspace(0, 1, 11)
-    # cmap_norm = colors.BoundaryNorm(cmap_bounds, cmap.N)
+        # Plot the colormesh
+        cmap = cmr.fall_r
+        hist = ax.pcolormesh(lon_bnd, lat_bnd, grids[0][:, :, pct_idx], cmap=cmap, vmin=0, vmax=1,
+                             transform=ccrs.PlateCarree())
 
-    hist = ax.pcolormesh(lon_bnd, lat_bnd, grids[0], cmap=cmap, vmin=0, vmax=1,
-                         transform=ccrs.PlateCarree())
+        # Add cartographic features
+        gl = ax.gridlines(crs=ccrs.PlateCarree(), draw_labels=True,
+                          linewidth=0.5, color='black', linestyle='--', zorder=11)
+        gl.xlocator = mticker.FixedLocator(np.arange(-180, 240, 60))
+        gl.ylocator = mticker.FixedLocator(np.arange(-90, 120, 30))
+        gl.xlabels_top = False
+        gl.ylabels_right = False
 
-    # Add cartographic features
-    gl = ax.gridlines(crs=ccrs.PlateCarree(), draw_labels=True,
-                      linewidth=0.5, color='black', linestyle='--', zorder=11)
-    gl.xlocator = mticker.FixedLocator(np.arange(-180, 240, 60))
-    gl.ylocator = mticker.FixedLocator(np.arange(-90, 120, 30))
-    gl.xlabels_top = False
-    gl.ylabels_right = False
+        land_10m = cfeature.NaturalEarthFeature('physical', 'land', '10m',
+                                                edgecolor='face',
+                                                facecolor='gray')
+        ax.add_feature(land_10m)
 
-    land_10m = cfeature.NaturalEarthFeature('physical', 'land', '10m',
-                                            edgecolor='face',
-                                            facecolor='gray')
-    ax.add_feature(land_10m)
-
-    cb = plt.colorbar(hist, cax=pos_cax)
-    cb.set_label('Mass fraction reaching Seychelles', size=12)
-    ax.set_aspect('auto', adjustable=None)
-    ax.margins(x=-0.01, y=-0.01)
-    plt.savefig(fh['fig'] + '_loss.png', dpi=300)
-    plt.close()
+        cb = plt.colorbar(hist, cax=pos_cax)
+        cb.set_label('Mass fraction reaching Seychelles (' + str(pct) + 'th percentile)', size=12)
+        ax.set_aspect('auto', adjustable=None)
+        ax.margins(x=-0.01, y=-0.01)
+        plt.savefig(fh['fig'] + '_p' + str(pct) + '_loss.png', dpi=300)
+        plt.close()
 
 
-    # Plotting ocean time
-    f, ax = plt.subplots(1, 1, figsize=(19, 10),
-                         subplot_kw={'projection': ccrs.Robinson(central_longitude=60)})
+        # Plotting ocean time
+        f, ax = plt.subplots(1, 1, figsize=(19, 10),
+                             subplot_kw={'projection': ccrs.Robinson(central_longitude=60)})
 
-    f.subplots_adjust(hspace=0, wspace=0, top=0.925, left=0.1)
-    ax.set_global()
-    ax.set_aspect(1)
+        f.subplots_adjust(hspace=0, wspace=0, top=0.925, left=0.1)
+        ax.set_global()
+        ax.set_aspect(1)
 
-    # Set up the colorbar
-    pos_cax = f.add_axes([ax.get_position().x1+0.01,ax.get_position().y0-0.025,0.015,ax.get_position().height+0.05])
+        # Set up the colorbar
+        pos_cax = f.add_axes([ax.get_position().x1+0.01,ax.get_position().y0-0.025,0.015,ax.get_position().height+0.05])
 
-    # Plot the colormesh
-    cmap = cmr.ocean
-    cmaplist = [cmap(i) for i in range(cmap.N)]
-    cmap = colors.LinearSegmentedColormap.from_list('dense_sq', cmaplist, cmap.N)
-    cmap_bounds = np.linspace(0, 12, 13)
-    cmap_norm = colors.BoundaryNorm(cmap_bounds, cmap.N)
+        # Plot the colormesh
+        cmap = cmr.ocean
+        cmaplist = [cmap(i) for i in range(cmap.N)]
+        cmap = colors.LinearSegmentedColormap.from_list('dense_sq', cmaplist, cmap.N)
+        cmap_bounds = np.linspace(0, 12, 13)
+        cmap_norm = colors.BoundaryNorm(cmap_bounds, cmap.N)
 
-    hist = ax.pcolormesh(lon_bnd, lat_bnd, grids[1], cmap=cmap, vmin=0, vmax=12,
-                         norm=cmap_norm, transform=ccrs.PlateCarree())
+        hist = ax.pcolormesh(lon_bnd, lat_bnd, grids[1][:, :, pct_idx], cmap=cmap, vmin=0, vmax=12,
+                             norm=cmap_norm, transform=ccrs.PlateCarree())
 
-    # Add cartographic features
-    gl = ax.gridlines(crs=ccrs.PlateCarree(), draw_labels=True,
-                      linewidth=0.5, color='black', linestyle='--', zorder=11)
-    gl.xlocator = mticker.FixedLocator(np.arange(-180, 240, 60))
-    gl.ylocator = mticker.FixedLocator(np.arange(-90, 120, 30))
-    gl.xlabels_top = False
-    gl.ylabels_right = False
+        # Add cartographic features
+        gl = ax.gridlines(crs=ccrs.PlateCarree(), draw_labels=True,
+                          linewidth=0.5, color='black', linestyle='--', zorder=11)
+        gl.xlocator = mticker.FixedLocator(np.arange(-180, 240, 60))
+        gl.ylocator = mticker.FixedLocator(np.arange(-90, 120, 30))
+        gl.xlabels_top = False
+        gl.ylabels_right = False
 
-    land_10m = cfeature.NaturalEarthFeature('physical', 'land', '10m',
-                                            edgecolor='face',
-                                            facecolor='gray')
-    ax.add_feature(land_10m)
+        land_10m = cfeature.NaturalEarthFeature('physical', 'land', '10m',
+                                                edgecolor='face',
+                                                facecolor='gray')
+        ax.add_feature(land_10m)
 
-    cb = plt.colorbar(hist, cax=pos_cax)
-    cb.set_label('Time at sea to Seychelles (years, 10th percentile)', size=12)
-    ax.set_aspect('auto', adjustable=None)
-    ax.margins(x=-0.01, y=-0.01)
-    plt.savefig(fh['fig'] + '_ot.png', dpi=300)
-    plt.close()
+        cb = plt.colorbar(hist, cax=pos_cax)
+        cb.set_label('Time at sea to Seychelles (years, ' + str(pct) + 'th percentile)', size=12)
+        ax.set_aspect('auto', adjustable=None)
+        ax.margins(x=-0.01, y=-0.01)
+        plt.savefig(fh['fig'] + '_p' + str(pct) + '_ot.png', dpi=300)
+        plt.close()
 
-    # Plotting ocean time
-    f, ax = plt.subplots(1, 1, figsize=(19, 10),
-                         subplot_kw={'projection': ccrs.Robinson(central_longitude=60)})
+        # Plotting ocean time
+        f, ax = plt.subplots(1, 1, figsize=(19, 10),
+                             subplot_kw={'projection': ccrs.Robinson(central_longitude=60)})
 
-    f.subplots_adjust(hspace=0, wspace=0, top=0.925, left=0.1)
-    ax.set_global()
-    ax.set_aspect(1)
+        f.subplots_adjust(hspace=0, wspace=0, top=0.925, left=0.1)
+        ax.set_global()
+        ax.set_aspect(1)
 
-    # Set up the colorbar
-    pos_cax = f.add_axes([ax.get_position().x1+0.01,ax.get_position().y0-0.025,0.015,ax.get_position().height+0.05])
+        # Set up the colorbar
+        pos_cax = f.add_axes([ax.get_position().x1+0.01,ax.get_position().y0-0.025,0.015,ax.get_position().height+0.05])
 
-    # Plot the colormesh
-    cmap = cmr.swamp_r
-    cmaplist = [cmap(i) for i in range(cmap.N)]
-    cmap = colors.LinearSegmentedColormap.from_list('dense_sq', cmaplist, cmap.N)
-    cmap_bounds = np.linspace(0, 12, 13)
-    cmap_norm = colors.BoundaryNorm(cmap_bounds, cmap.N)
+        # Plot the colormesh
+        cmap = cmr.swamp_r
+        cmaplist = [cmap(i) for i in range(cmap.N)]
+        cmap = colors.LinearSegmentedColormap.from_list('dense_sq', cmaplist, cmap.N)
+        cmap_bounds = np.linspace(0, 12, 13)
+        cmap_norm = colors.BoundaryNorm(cmap_bounds, cmap.N)
 
-    hist = ax.pcolormesh(lon_bnd, lat_bnd, grids[2]*12, cmap=cmap, vmin=0, vmax=12,
-                         norm=cmap_norm, transform=ccrs.PlateCarree())
+        hist = ax.pcolormesh(lon_bnd, lat_bnd, grids[2][:, :, pct_idx]*12, cmap=cmap, vmin=0, vmax=12,
+                             norm=cmap_norm, transform=ccrs.PlateCarree())
 
-    # Add cartographic features
-    gl = ax.gridlines(crs=ccrs.PlateCarree(), draw_labels=True,
-                      linewidth=0.5, color='black', linestyle='--', zorder=11)
-    gl.xlocator = mticker.FixedLocator(np.arange(-180, 240, 60))
-    gl.ylocator = mticker.FixedLocator(np.arange(-90, 120, 30))
-    gl.xlabels_top = False
-    gl.ylabels_right = False
+        # Add cartographic features
+        gl = ax.gridlines(crs=ccrs.PlateCarree(), draw_labels=True,
+                          linewidth=0.5, color='black', linestyle='--', zorder=11)
+        gl.xlocator = mticker.FixedLocator(np.arange(-180, 240, 60))
+        gl.ylocator = mticker.FixedLocator(np.arange(-90, 120, 30))
+        gl.xlabels_top = False
+        gl.ylabels_right = False
 
-    land_10m = cfeature.NaturalEarthFeature('physical', 'land', '10m',
-                                            edgecolor='face',
-                                            facecolor='gray')
-    ax.add_feature(land_10m)
+        land_10m = cfeature.NaturalEarthFeature('physical', 'land', '10m',
+                                                edgecolor='face',
+                                                facecolor='gray')
+        ax.add_feature(land_10m)
 
-    cb = plt.colorbar(hist, cax=pos_cax)
-    cb.set_label('Time along the coast enroute to Seychelles (months, 10th percentile)', size=12)
-    ax.set_aspect('auto', adjustable=None)
-    ax.margins(x=-0.01, y=-0.01)
-    plt.savefig(fh['fig'] + '_ct.png', dpi=300)
-    plt.close()
+        cb = plt.colorbar(hist, cax=pos_cax)
+        cb.set_label('Time along the coast enroute to Seychelles (months, ' + str(pct) + 'th percentile)', size=12)
+        ax.set_aspect('auto', adjustable=None)
+        ax.margins(x=-0.01, y=-0.01)
+        plt.savefig(fh['fig'] + '_p' + str(pct) + '_ct.png', dpi=300)
+        plt.close()
