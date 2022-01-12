@@ -59,9 +59,9 @@ param = {# Release timing
          'max_age'           : 10.,           # Max age (years). 0 == inf.
 
          # Runtime parameters
-         'Yend'              : y_in+10,                # Last year of simulation
+         'Yend'              : y_in+0,                # Last year of simulation
          'Mend'              : m_in   ,                # Last month
-         'Dend'              : 2   ,                   # Last day (00:00, start)
+         'Dend'              : 5   ,                   # Last day (00:00, start)
          'dt_RK4'            : timedelta(minutes=60),  # RK4 time-step
 
          # Output parameters
@@ -80,8 +80,8 @@ param = {# Release timing
                                 'cr' : 0.25},          # Fraction entering sea
 
          # Testing parameters
-         'test'              : False,                  # Activate test mode
-         'line_rel'          : False,                  # Release particles in line
+         'test'              : True,                  # Activate test mode
+         'line_rel'          : True,                  # Release particles in line
          'dt_out'            : timedelta(minutes=60),} # Output frequency (testing only)
 
 # DIRECTORIES
@@ -160,8 +160,8 @@ if not param['test']:
 else:
     if param['line_rel']:
         particles['loc_array'] = {}
-        particles['loc_array']['lon0'] = 80.084
-        particles['loc_array']['lon1'] = 80.084
+        particles['loc_array']['lon0'] = 80.033
+        particles['loc_array']['lon1'] = 80.033
         particles['loc_array']['lat0'] = 5.8
         particles['loc_array']['lat1'] = 6.57
 

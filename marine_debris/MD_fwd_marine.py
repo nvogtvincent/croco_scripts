@@ -45,7 +45,7 @@ param = {# Release timing
          'RPM'               : 1,             # Releases per month
 
          # Seeding strategy
-         'pn'                : 5,            # Particles per cell (sqrt)
+         'pn'                : 8,            # Particles per cell (sqrt)
          'lon_west'          : 20,
          'lon_east'          : 100,
          'lat_south'         : -40,
@@ -100,7 +100,7 @@ dirs = {'script': os.path.dirname(os.path.realpath(__file__)),
 fh = {'ocean':   sorted(glob(dirs['model'] + 'OCEAN_*.nc')),
       'wave':    sorted(glob(dirs['model'] + 'WAVE_*.nc')),
       'grid':    dirs['grid'] + 'griddata.nc',
-      'fish':   dirs['fish'] + 'GFW_gridded_2016_2019.nc',
+      'fish':    dirs['fish'] + 'GFW_gridded_2016_2019.nc',
       'traj':    dirs['traj'] + param['fn_out'],}
 
 # MODIFICATION TO PREVENT CRASHING IF END_YR=1993
