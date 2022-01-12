@@ -29,14 +29,14 @@ import time
 
 # PARAMETERS
 param = { # Runtime parameters
-         'dt': 1800,    # Simulation timestep (s)
+         'dt': 3600,    # Simulation timestep (s)
 
          # Analysis parameters
          'ls': 3650,    # Sinking timescale (days)
          'lb': 40,      # Beaching timescale (days)
 
          # Mode
-         'mode': 'marine'   # Options: land/marine
+         'mode': 'land'   # Options: land/marine
          }
 
 # DIRECTORIES
@@ -95,13 +95,16 @@ def translate_events(array):
     return [sink_id, time_at_sink, prior_tb, prior_ts]
 
 
-def convert_events(fh_list, dt, ls, lb, n_events):
+def convert_events(fh_list, dt, ls, lb, n_events, **kwargs):
     # Keep track of some basic data
     total_particles = 0
     total_encounters = 0
     total_full_events = 0
 
-    output_array_made = False
+    if 'particles_per_file' in kwargs:
+        total_particles_all = len(fh_list)*kwargs['particles_per_file']
+
+    data_list = []
 
     # Open all data
     for fhi, fh in enumerate(fh_list):
@@ -210,20 +213,20 @@ def convert_events(fh_list, dt, ls, lb, n_events):
 
                 # Clean up
                 frame.drop(labels=['sink_date', 'source_date'], axis=1, inplace=True)
+                frame.reset_index(drop=True)
 
                 # Append
-                if not output_array_made:
-                    data = frame.copy()
-                    output_array_made = True
-                else:
-                    data = data.append(frame, ignore_index=True)
+                data_list.append(frame)
+
+    data = pd.concat(data_list, axis=0)
 
     if (data['days_at_sea'].max() > 3660) or (data['days_at_sea'].max() < 3600):
         print('WARNING: ARE YOU SURE THAT THE TIMESTEP IS CORRECT?')
         print('max: ' + str(data['days_at_sea'].max()) + ' days')
 
     # Store stats
-    stats = {'total_particles': total_particles,
+    stats = {'total_particles_reaching_seychelles': total_particles,
+             'total_particles_released': total_particles_all,
              'total_encounters': total_encounters,
              'total_full_events': total_full_events}
 
@@ -232,5 +235,5 @@ def convert_events(fh_list, dt, ls, lb, n_events):
 
 
 t0 = time.time()
-data, stats = convert_events(fh['traj'], param['dt'], param['ls'], param['lb'], 20)
+data, stats = convert_events(fh['traj'], param['dt'], param['ls'], param['lb'], 20, particles_per_file=646456)
 print(time.time() - t0)
