@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 import cmocean.cm as cm
 from parcels import (Field, FieldSet, ParticleSet, JITParticle, AdvectionRK4,
                      ErrorCode, Geographic, GeographicPolar, Variable,
-                     DiffusionUniformKh)
+                     DiffusionUniformKh, ParcelsRandom)
 from netCDF4 import Dataset, num2date
 from datetime import timedelta, datetime
 from glob import glob
@@ -45,10 +45,10 @@ param = {# Release timing
          'RPM'               : 1,             # Releases per month
 
          # Seeding strategy
-         'pn'                : 8,            # Particles per cell (sqrt)
+         'pn'                : 10,            # Particles per cell (sqrt)
          'lon_west'          : 20,
          'lon_east'          : 100,
-         'lat_south'         : -40,
+         'lat_south'         : -42,
          'lat_north'         : 30,
 
          # Sink locations
@@ -64,11 +64,11 @@ param = {# Release timing
          # Runtime parameters
          'Yend'              : y_in+10,                # Last year of simulation
          'Mend'              : m_in   ,                # Last month
-         'Dend'              : 5   ,                   # Last day (00:00, start)
+         'Dend'              : 2   ,                   # Last day (00:00, start)
          'dt_RK4'            : timedelta(minutes=60),  # RK4 time-step
 
          # Output parameters
-         'fn_out'            : str(y_in) + '_' + str(m_in) + '_' + str(part) + '_FwdMar.nc',  # Output filename
+         'fn_out'            : str(y_in) + '_' + str(m_in) + '_' + str(part) + '_FwdMar0000.nc',  # Output filename
 
          # Partitioning
          'total_partitions'  : tot_part,
@@ -325,6 +325,8 @@ if param['Kh']:
 # ADD MAXIMUM PARTICLE AGE (IF LIMITED AGE)
 fieldset.add_constant('max_age', param['max_age']*3600*24*365)
 
+# SET SEED
+ParcelsRandom.seed(690)
 
 ##############################################################################
 # PARTICLE CLASS #############################################################
@@ -364,25 +366,15 @@ class debris(JITParticle):
     # PROVENANCE IDENTIFIERS #################################################
     ##########################################################################
 
-    # Source cell ID (specifically identifying source cell)
-    source_id = Variable('source_id',
-                         dtype=np.int32,
-                         to_write=True)
+    # GFW_num - Number of 1/12 cells corresponding to the GFW cell
+    gfw_num = Variable('gfw_num',
+                       dtype=np.int32,
+                       to_write=True)
 
     # Source cell ID - specifically identifying source cell
     source_cell = Variable('source_cell',
                            dtype=np.int32,
                            to_write=True)
-
-    # Source cell ID (Initial mass of plastic from direct coastal input)
-    cp0 = Variable('cp0',
-                   dtype=np.float32,
-                   to_write=True)
-
-    # Source cell ID (Initial mass of plastic from riverine input)
-    rp0 = Variable('rp0',
-                   dtype=np.float32,
-                   to_write=True)
 
     ##########################################################################
     # ANTIBEACHING VARIABLES #################################################
@@ -676,8 +668,8 @@ def antibeach(particle, fieldset, time):
         particle.vc = fieldset.cnormy_rho[particle]
 
         if particle.cd <= 0:
-            particle.uc *= 3 # Rapid acceleration at 3m/s away to sea (exceeds all wind + ocean)
-            particle.vc *= 3 # Rapid acceleration at 3m/s away to sea (exceeds all wind + ocean)
+            particle.uc *= 2 # Rapid acceleration at 3m/s away to sea (exceeds all wind + ocean)
+            particle.vc *= 2 # Rapid acceleration at 3m/s away to sea (exceeds all wind + ocean)
         elif particle.cd < 0.1:
             particle.uc *= 1*(particle.cd - 0.5)**2 +75*(particle.cd - 0.1)**2 # Will prevent all normal coastward velocities (< 1m/s) from beaching
             particle.vc *= 1*(particle.cd - 0.5)**2 +75*(particle.cd - 0.1)**2 # Will prevent all normal coastward velocities (< 1m/s) from beaching
