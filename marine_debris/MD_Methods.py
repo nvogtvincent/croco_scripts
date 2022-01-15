@@ -261,9 +261,6 @@ def release_loc_ocean(param, fh):
 
     marine_release_loc = np.ones_like(id_psi, dtype=np.int32)
 
-    plt.imshow(lsm_psi)
-    plt.scatter(2819, 934)
-
     # Mask with limits
     y_idx_max = np.searchsorted(lat_psi, param['lat_north'])
     y_idx_min = np.searchsorted(lat_psi, param['lat_south'])
@@ -301,7 +298,6 @@ def release_loc_ocean(param, fh):
 
     # Calculate the total number of particles
     nl  = idx[0].shape[0]  # Number of locations
-    id_list = id_psi[tuple(idx)]
 
     pn_cell = pn**2
     pn_tot = nl*pn_cell
