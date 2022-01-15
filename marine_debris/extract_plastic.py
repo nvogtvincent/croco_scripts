@@ -6,21 +6,11 @@ Script to read event data from forward marine debris simulations
 """
 
 import os
-import MD_Methods as mdm
 import numpy as np
-import matplotlib.pyplot as plt
-import cmocean.cm as cm
 import pandas as pd
-import cmasher as cmr
-from parcels import (Field, FieldSet, ParticleSet, JITParticle, AdvectionRK4,
-                     ErrorCode, Geographic, GeographicPolar, Variable,
-                     DiffusionUniformKh)
-from netCDF4 import Dataset, num2date
-from datetime import timedelta, datetime
+from netCDF4 import Dataset
+from datetime import datetime
 from glob import glob
-from sys import argv
-from numba import njit
-from datetime import timedelta, datetime
 import time
 
 ##############################################################################
@@ -32,8 +22,8 @@ param = { # Runtime parameters
          'dt': 3600,    # Simulation timestep (s)
 
          # Analysis parameters
-         'ls': 3650,    # Sinking timescale (days)
-         'lb': 40,      # Beaching timescale (days)
+         'ls_d': 3650,    # Sinking timescale (days)
+         'lb_d': 40,      # Beaching timescale (days)
 
          # Mode
          'mode': 'land'   # Options: land/marine
@@ -50,11 +40,12 @@ dirs = {'script': os.path.dirname(os.path.realpath(__file__)),
 fh = {'grid':    dirs['grid'] + 'griddata.nc',
       'clist':   dirs['plastic'] + 'country_list.in',
       'fig':     dirs['fig'] + 'fwd_results.png',
-      'traj':    sorted(glob(dirs['traj'] + '*.nc'))}
+      'traj':    sorted(glob(dirs['traj'] + '*.nc')),
+      'output':  dirs['traj']}
 
 # Convert sinking rates and beaching rates to correct units
-param['ls'] = 1/(param['ls']*3600*24)
-param['lb'] = 1/(param['lb']*3600*24)
+param['ls'] = 1/(param['ls_d']*3600*24)
+param['lb'] = 1/(param['lb_d']*3600*24)
 
 if param['mode'] == 'land':
     param['mode'] = True
@@ -70,7 +61,7 @@ else:
 
 def translate_events(array):
     # Create output arrays
-    sink_id = np.zeros_like(array, dtype=np.int32)
+    sink_id = np.zeros_like(array, dtype=np.int8)
     time_at_sink = np.zeros_like(array, dtype=np.int32)
     prior_tb = np.zeros_like(array, dtype=np.int32)
     prior_ts = np.zeros_like(array, dtype=np.int32)
@@ -96,6 +87,25 @@ def translate_events(array):
 
 
 def convert_events(fh_list, dt, ls, lb, n_events, **kwargs):
+    '''
+    Parameters
+    ----------
+    fh_list : List of trajectory files
+    dt : Simulation timestep (s)
+    ls : Sinking rate (1/s)
+    lb : Beaching rate (1/s)
+    n_events : Number of events per particle to record
+
+    **kwargs :
+        particles_per_file: number of particles released per file
+
+    Returns
+    -------
+    data : Pandas file containing sorted data
+    stats : TYPE
+        DESCRIPTION.
+
+    '''
     # Keep track of some basic data
     total_particles = 0
     total_encounters = 0
@@ -121,14 +131,14 @@ def convert_events(fh_list, dt, ls, lb, n_events, **kwargs):
 
                 # Firstly load primary variables into memory
                 raw_event_array = np.zeros((n_traj, n_events), dtype=np.int64)
-                raw_source_cell_array = np.zeros((n_traj, n_events), dtype=np.int64)
+                raw_source_cell_array = np.zeros((n_traj, n_events), dtype=np.int32)
 
                 if param['mode']:
                     raw_rp0_array = np.zeros((n_traj, n_events), dtype=np.float32)
                     raw_cp0_array = np.zeros((n_traj, n_events), dtype=np.float32)
-                    raw_source_id_array = np.zeros((n_traj, n_events), dtype=np.int64)
+                    raw_source_id_array = np.zeros((n_traj, n_events), dtype=np.int16)
                 else:
-                    raw_gfw_num_array = np.zeros((n_traj, n_events), dtype=np.float32)
+                    raw_gfw_num_array = np.zeros((n_traj, n_events), dtype=np.int32)
 
                 for i in range(n_events):
                     raw_event_array[:, i] = nc.variables['e' + str(i)][:, 0]
@@ -171,10 +181,10 @@ def convert_events(fh_list, dt, ls, lb, n_events, **kwargs):
 
 
                 # Now convert events
-                sink_array = np.zeros_like(raw_event_array, dtype=np.int64)
-                time_at_sink_array = np.zeros_like(raw_event_array, dtype=np.int64)
-                prior_tb_array = np.zeros_like(raw_event_array, dtype=np.int64)
-                prior_ts_array = np.zeros_like(raw_event_array, dtype=np.int64)
+                sink_array = np.zeros_like(raw_event_array, dtype=np.int8)
+                time_at_sink_array = np.zeros_like(raw_event_array, dtype=np.int32)
+                prior_tb_array = np.zeros_like(raw_event_array, dtype=np.int32)
+                prior_ts_array = np.zeros_like(raw_event_array, dtype=np.int32)
 
                 converted_arrays = translate_events(raw_event_array)
 
@@ -187,6 +197,7 @@ def convert_events(fh_list, dt, ls, lb, n_events, **kwargs):
                 prior_mass = np.exp((-ls*prior_ts_array)+(-lb*prior_tb_array))
                 post_mass = prior_mass*np.exp(-(ls+lb)*time_at_sink_array)
                 loss = prior_mass - post_mass
+                loss = loss.astype('float32')
 
                 # Now form output array
                 frame = pd.DataFrame(data=raw_source_cell_array, columns=['source_cell'])
@@ -204,9 +215,7 @@ def convert_events(fh_list, dt, ls, lb, n_events, **kwargs):
                 frame['sink_date'] = frame['days_at_sea'] + t0
                 frame['sink_year'] = frame['sink_date'].dt.year
                 frame['sink_month'] = frame['sink_date'].dt.month
-
                 frame['days_at_sea'] = frame['days_at_sea'].dt.days
-
                 frame['source_date'] = pd.to_datetime(t0)
                 frame['source_year'] = frame['source_date'].dt.year
                 frame['source_month'] = frame['source_date'].dt.month
@@ -215,10 +224,18 @@ def convert_events(fh_list, dt, ls, lb, n_events, **kwargs):
                 frame.drop(labels=['sink_date', 'source_date'], axis=1, inplace=True)
                 frame.reset_index(drop=True)
 
+                # Remove unnecessary precision
+                frame = frame.astype({'days_at_sea': 'int16',
+                                      'sink_year': 'int16',
+                                      'sink_month': 'int8',
+                                      'source_year': 'int16',
+                                      'source_month': 'int8'})
+
                 # Append
                 data_list.append(frame)
 
     data = pd.concat(data_list, axis=0)
+    data.reset_index(drop=True)
 
     if (data['days_at_sea'].max() > 3660) or (data['days_at_sea'].max() < 3600):
         print('WARNING: ARE YOU SURE THAT THE TIMESTEP IS CORRECT?')
@@ -230,10 +247,24 @@ def convert_events(fh_list, dt, ls, lb, n_events, **kwargs):
              'total_encounters': total_encounters,
              'total_full_events': total_full_events}
 
+    if 'save_data' in kwargs:
+        if 'save_fh' in kwargs:
+            save_fh = kwargs['save_fh']
+        else:
+            save_fh = 'data.nc'
+
+        data.to_pickle(save_fh)
+
     return data, stats
 
 
 
 t0 = time.time()
-data, stats = convert_events(fh['traj'], param['dt'], param['ls'], param['lb'], 20, particles_per_file=646456)
-print(time.time() - t0)
+for year in np.arange(1993, 2010):
+    year_fh = sorted(glob(dirs['traj'] + str(year) + '*.nc'))
+    save_fh = dirs['traj'] + 'data_s' + str(param['ls_d']) + '_b' + str(param['lb_d']) + '_' + str(year) + '.pkl'
+    data, stats = convert_events(year_fh, param['dt'], param['ls'], param['lb'], 20,
+                                 particles_per_file=646456, save_data=True,
+                                 save_fh=save_fh)
+    print(stats)
+print('Run time: ' + str(time.time() - t0) + 's')
