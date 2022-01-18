@@ -27,7 +27,8 @@ param = {# Analysis parameters
          'lb_d': 20,        # Beaching timescale (days)
          'cf_cutoff': 0.95, # Cumulative frequency cutoff
          'title': 'Debris sources for zero windage, l(s)=10a, l(b)=20d',
-         'cmap': cmr.guppy_r
+         'cmap': cmr.guppy_r,
+         'write_cmap': True # Whether to write cmap data
          }
 
 # DIRECTORIES
@@ -40,7 +41,8 @@ dirs = {'script': os.path.dirname(os.path.realpath(__file__)),
 fh = {'source_list': dirs['plastic'] + 'country_list.in',
       'sink_list': dirs['plastic'] + 'sink_list.in',
       'fig': dirs['fig'] + 'flux_by_country_s' + str(param['ls_d']) + '_b' + str(param['lb_d']) + '.png',
-      'data': sorted(glob(dirs['traj'] + 'data_s' + str(param['ls_d']) + '_b' + str(param['lb_d']) + '*.pkl')),}
+      'data': sorted(glob(dirs['traj'] + 'data_s' + str(param['ls_d']) + '_b' + str(param['lb_d']) + '*.pkl')),
+      'cmap': dirs['fig'] + 'cmap_data.pkl'}
 
 ##############################################################################
 # CALCULATE FLUXES                                                           #
@@ -57,12 +59,11 @@ nsink = np.shape(sink_list)[0]
 data_by_sink = []
 
 for data_fh in fh['data']:
-    if data_fh != fh['data'][0]: # TEMPORARY TIME SAVING HACK, REMOVE!
-        break
+    # if data_fh != fh['data'][0]: # TEMPORARY TIME SAVING HACK, REMOVE!
+    #     break
 
     data = pd.read_pickle(data_fh)
     print(data_fh)
-
 
     for sinkidx, sink in enumerate(sink_list['Sink code']):
 
@@ -86,39 +87,38 @@ for data_fh in fh['data']:
     else:
         data_by_sink[-1] = data_by_sink[-1].add(data, fill_value=0)
 
-# Extract and normalise for presentation (choose <= 90% for each site)
-country_prop_list = []
-label_list = []
+# On the basis of the combined mass flux, extract the top 10 countries
+data_all = data_by_sink[-1].copy()
+data_all = data_all.sort_values(axis=0, ascending=False)
+data_all = np.array(data_all.index[:10])
+data_all = np.concatenate([data_all, [999]])
+country_order = pd.DataFrame({'source_id': data_all})
+
+# Attribute colours and names
+source_dict = dict(zip(source_list['ISO code'], source_list['Country Name']))
+
+if param['write_cmap']:
+
+    country_order['name'] = [source_dict[i] for i in country_order['source_id']]
+    country_order['cmap'] = [param['cmap'](i) for i in np.linspace(0, param['cmap'].N, num=len(country_order), dtype=int)]
+    country_order.to_pickle(fh['cmap'])
+
+else:
+    country_order = pd.read_pickle(fh['cmap'])
+
+# Now extract the proportions of these countries from the data
+country_prop_list = pd.DataFrame()
 for i in range(len(data_by_sink)):
-    data_i = data_by_sink[i].sort_values(axis=0)
-    data_i = pd.DataFrame(data_i)
-    total_flux = data_i['plastic_flux'].sum()
+    data_i = data_by_sink[i]
+    data_i_out = data_by_sink[i].loc[np.isin(data_by_sink[i].index,
+                                             country_order['source_id'])]
+    data_i_out[999] = data_by_sink[i].loc[~np.isin(data_by_sink[i].index,
+                                                   country_order['source_id'])].sum()
 
-    data_i['all'] = pd.DataFrame(data_by_sink[-1])['plastic_flux']
-    data_i['prop'] = data_i['plastic_flux']/data_i['plastic_flux'].sum()
-    data_i['cumsum'] = np.cumsum(data_i['prop'][::-1])
-    data_i=data_i.loc[data_i['cumsum'] <= param['cf_cutoff']]
-
-    data_i = data_i.append(pd.DataFrame([[total_flux - data_i['plastic_flux'].sum(),
-                                          0,
-                                          1 - data_i['prop'].sum(),
-                                          1]], columns=data_i.columns, index=[999]))
-
-    label_list.append(data_i.index.values)
-    country_prop_list.append(data_i.sort_values(['all'], axis=0, ascending=False))
-
-# Get unique labels
-label_list = np.unique(np.concatenate(label_list, axis=0))
+    country_prop_list[i+1] = data_i_out/data_i_out.sum() # [i+1] because sink_id starts from 1
 
 # Make dict for names
 source_dict = dict(zip(source_list['ISO code'], source_list['Country Name']))
-
-# Calculate colormap
-# Firstly sort labels by total mass
-sorted_labels = np.array(data_by_sink[-1].filter(label_list).sort_values(ascending=False).index)
-sorted_labels = np.concatenate([sorted_labels, [999]])
-label_color = [param['cmap'](i) for i in np.linspace(0, param['cmap'].N, num=len(sorted_labels), dtype=int)]
-color_dict = dict(zip(sorted_labels, label_color))
 
 ##############################################################################
 # PLOT FLUXES                                                                #
@@ -150,8 +150,9 @@ for i in range(len(x_pos)):
 
 # Plot data
 # Firstly use a quick hack to get the legend in the correct order
-for source in sorted_labels:
-    ax.bar(0, 0, 0, color=color_dict[source], label=source_dict[source])
+for source in country_order['source_id']:
+    ax.bar(0, 0, 0, color=country_order['cmap'].loc[country_order['source_id']==source],
+           label=country_order['name'].loc[country_order['source_id']==source].values[0])
 
 cmap = param['cmap']
 cmaplist = [cmap(i) for i in range(cmap.N)]
@@ -159,16 +160,13 @@ cmaplist = [cmap(i) for i in range(cmap.N)]
 source_list_for_legend = []
 
 for i in range(len(x_pos)):
-    i_data = country_prop_list[i]
     cumsum = 0
 
-    for j in range(len(i_data)):
-        source = i_data.iloc[j].name
+    for j, source in enumerate(country_order['source_id']):
+        ax.bar(x_pos[i], country_prop_list[i+1].loc[source], width,
+               bottom=cumsum, color=country_order['cmap'].loc[country_order['source_id']==source])
 
-        ax.bar(x_pos[i], i_data['prop'].iloc[j], width, bottom=cumsum,
-               color=color_dict[source])
-
-        cumsum += i_data['prop'].iloc[j]
+        cumsum += country_prop_list[i+1].loc[source]
 
 ax.set_xticks(x_cpos)
 ax.set_xticklabels(['Aldabra Group', 'Farquhar Group', 'Alphonse Group',
@@ -183,7 +181,7 @@ ax.spines['bottom'].set_visible(False)
 ax.set_ylabel('Proportion of beaching terrestrial debris from source')
 ax.set_title(param['title'], y=1.02)
 
-ax.legend(loc="lower center", bbox_to_anchor=(0.5, -0.08), ncol=len(sorted_labels),
+ax.legend(loc="lower center", bbox_to_anchor=(0.5, -0.08), ncol=len(country_order),
           frameon=False)
 
 plt.savefig(fh['fig'], dpi=300)
