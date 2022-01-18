@@ -5,13 +5,16 @@ Plot plastic fluxes to Seychelles by country and sink location
 @author: Noam Vogt-Vincent
 """
 
+### TO DO!!!!!
+# Sources are currently excluded if they are not in the top X in a source, but are
+# in others (should be included)
+
+
 import os
 import numpy as np
 import pandas as pd
 from glob import glob
 import matplotlib.pyplot as plt
-import matplotlib.colors as colors
-from matplotlib.gridspec import GridSpec
 import cmasher as cmr
 
 ##############################################################################
@@ -21,9 +24,10 @@ import cmasher as cmr
 # PARAMETERS
 param = {# Analysis parameters
          'ls_d': 3650,      # Sinking timescale (days)
-         'lb_d': 40,        # Beaching timescale (days)
-         'cf_cutoff': 0.9, # Cumulative frequency cutoff
-         'title': 'Debris sources for zero windage, l(s)=10a, l(b)=40d'
+         'lb_d': 20,        # Beaching timescale (days)
+         'cf_cutoff': 0.95, # Cumulative frequency cutoff
+         'title': 'Debris sources for zero windage, l(s)=10a, l(b)=20d',
+         'cmap': cmr.guppy_r
          }
 
 # DIRECTORIES
@@ -35,8 +39,8 @@ dirs = {'script': os.path.dirname(os.path.realpath(__file__)),
 # FILE HANDLES
 fh = {'source_list': dirs['plastic'] + 'country_list.in',
       'sink_list': dirs['plastic'] + 'sink_list.in',
-      'fig': dirs['fig'] + 'flux_by_country_b' + str(param['lb_d']) + '_s' + str(param['ls_d']) + '.png',
-      'data': sorted(glob(dirs['traj'] + '*.pkl')),}
+      'fig': dirs['fig'] + 'flux_by_country_s' + str(param['ls_d']) + '_b' + str(param['lb_d']) + '.png',
+      'data': sorted(glob(dirs['traj'] + 'data_s' + str(param['ls_d']) + '_b' + str(param['lb_d']) + '*.pkl')),}
 
 ##############################################################################
 # CALCULATE FLUXES                                                           #
@@ -53,8 +57,8 @@ nsink = np.shape(sink_list)[0]
 data_by_sink = []
 
 for data_fh in fh['data']:
-    # if data_fh != fh['data'][0]: # TEMPORARY TIME SAVING HACK, REMOVE!
-    #     break
+    if data_fh != fh['data'][0]: # TEMPORARY TIME SAVING HACK, REMOVE!
+        break
 
     data = pd.read_pickle(data_fh)
     print(data_fh)
@@ -113,7 +117,7 @@ source_dict = dict(zip(source_list['ISO code'], source_list['Country Name']))
 # Firstly sort labels by total mass
 sorted_labels = np.array(data_by_sink[-1].filter(label_list).sort_values(ascending=False).index)
 sorted_labels = np.concatenate([sorted_labels, [999]])
-label_color = [cmr.ocean(i) for i in np.linspace(0, cmr.ocean.N, num=len(sorted_labels)+1, dtype=int)]
+label_color = [param['cmap'](i) for i in np.linspace(0, param['cmap'].N, num=len(sorted_labels), dtype=int)]
 color_dict = dict(zip(sorted_labels, label_color))
 
 ##############################################################################
@@ -149,7 +153,7 @@ for i in range(len(x_pos)):
 for source in sorted_labels:
     ax.bar(0, 0, 0, color=color_dict[source], label=source_dict[source])
 
-cmap = cmr.ocean
+cmap = param['cmap']
 cmaplist = [cmap(i) for i in range(cmap.N)]
 
 source_list_for_legend = []
@@ -166,8 +170,6 @@ for i in range(len(x_pos)):
 
         cumsum += i_data['prop'].iloc[j]
 
-
-# ax.bar(x_pos, test, width=width)
 ax.set_xticks(x_cpos)
 ax.set_xticklabels(['Aldabra Group', 'Farquhar Group', 'Alphonse Group',
                     'Amirante Islands', 'Southern Coral Group', 'Seychelles Plateau',
@@ -178,8 +180,10 @@ ax.spines['left'].set_visible(False)
 ax.spines['right'].set_visible(False)
 ax.spines['top'].set_visible(False)
 ax.spines['bottom'].set_visible(False)
-ax.set_ylabel('Proportion of beaching debris from source')
+ax.set_ylabel('Proportion of beaching terrestrial debris from source')
 ax.set_title(param['title'], y=1.02)
 
 ax.legend(loc="lower center", bbox_to_anchor=(0.5, -0.08), ncol=len(sorted_labels),
           frameon=False)
+
+plt.savefig(fh['fig'], dpi=300)
