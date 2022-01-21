@@ -3,7 +3,9 @@
 """
 This script regrids reef probability data to the CROCO and CMEMS grids
 @author: Noam Vogt-Vincent
+
 @reef_probability_source: https://doi.org/10.1007/s00338-020-02005-6
+@eez_source: https://www.marineregions.org/
 """
 
 import os
@@ -11,11 +13,18 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.colors as colors
 import cmasher as cmr
+from tqdm import tqdm
 from netCDF4 import Dataset, num2date
 from datetime import timedelta, datetime
+from shapely.geometry import Point
+import matplotlib.ticker as mticker
+import cartopy.crs as ccrs
+import geopandas as gpd
 from glob import glob
 from osgeo import gdal, osr
 from geographiclib.geodesic import Geodesic
+from sklearn.cluster import AgglomerativeClustering
+from sklearn.neighbors import kneighbors_graph
 
 ###############################################################################
 # Parameters ##################################################################
@@ -33,14 +42,17 @@ param = {'grid_res': 1.0,                          # Grid resolution in degrees
 dirs = {'script': os.path.dirname(os.path.realpath(__file__)),
         'grid': os.path.dirname(os.path.realpath(__file__)) + '/../GRID_DATA/',
         'coral_data': os.path.dirname(os.path.realpath(__file__)) + '/../GRID_DATA/CORAL/',
+        'loc': os.path.dirname(os.path.realpath(__file__)) + '/../GRID_DATA/LOC/',
         'fig': os.path.dirname(os.path.realpath(__file__)) + '/../FIGURES/'}
 
 # FILE HANDLES
 fh = {'cmems': dirs['grid'] + 'griddata_cmems.nc',
       'winds': dirs['grid'] + 'griddata_winds.nc',
       'coral': sorted(glob(dirs['coral_data'] + '**/*.tif', recursive=True)),
+      'eez': dirs['loc'] + 'EEZ_Land_v3_202030.shp',
+      'coral_id': dirs['loc'] + 'test2.gpkg',
       'out':   dirs['grid'] + 'coral_grid.nc',
-      'fig':   dirs['fig'] + 'reef_map_',}
+      'fig':   dirs['fig'] + 'reef_map',}
 
 ###############################################################################
 # Open grids ##################################################################
@@ -94,11 +106,11 @@ coral_grid_c = np.zeros_like(lsm_psi_c, dtype=np.float64).T
 ###############################################################################
 
 # Loop through each file and bin all coral reef cells onto model grids
-for i, reef_file in enumerate(fh['coral'][:]):
+print('Gridding coral sites...')
+for i, reef_file in tqdm(enumerate(fh['coral'][:]), total=len(fh['coral'])):
 
-    # if i > 200: # TEMPORARY TIME SAVING HACK, REMOVE!
+    # if i > 100: # TEMPORARY TIME SAVING HACK, REMOVE!
     #     break
-
 
     reef_data_obj = gdal.Open(reef_file)
     reef_data = reef_data_obj.ReadAsArray()[:]
@@ -173,7 +185,8 @@ coral_area_before_c = np.sum(coral_grid_c)
 coral_grid_w_preshift = np.copy(coral_grid_w)
 coral_grid_c_preshift = np.copy(coral_grid_c)
 
-for yidx, xidx in zip(land_idx_w[0], land_idx_w[1]):
+print('Shifting coral cells (part 1)...')
+for yidx, xidx in tqdm(zip(land_idx_w[0], land_idx_w[1]), total=len(land_idx_w[0])):
     ocean_found = False
     i = 0
     coral_area_in_land_cell = coral_grid_w[yidx, xidx]
@@ -190,7 +203,8 @@ for yidx, xidx in zip(land_idx_w[0], land_idx_w[1]):
     coral_grid_w[yidx-i:yidx+i+1, xidx-i:xidx+i+1] += (1-local_zone)*int(coral_area_in_land_cell/n_ocean_cells)
     coral_grid_w[yidx, xidx] = 0
 
-for yidx, xidx in zip(land_idx_c[0], land_idx_c[1]):
+print('Shifting coral cells (part 2)...')
+for yidx, xidx in tqdm(zip(land_idx_c[0], land_idx_c[1]), total=len(land_idx_c[0])):
     ocean_found = False
     i = 0
     coral_area_in_land_cell = coral_grid_c[yidx, xidx]
@@ -210,25 +224,229 @@ coral_area_after_w = np.sum(coral_grid_w)
 coral_area_after_c = np.sum(coral_grid_c)
 
 ###############################################################################
+# Apply EEZ mask ##############################################################
+###############################################################################
+
+eez_file = gpd.read_file(fh['eez'])
+
+# Create new grids
+eez_grid_w = np.zeros_like(coral_grid_w, dtype=np.int16)
+eez_grid_c = np.zeros_like(coral_grid_c, dtype=np.int16)
+
+# Loop through all reef locations
+coral_idx_w = np.where(coral_grid_w > 0)
+coral_idx_c = np.where(coral_grid_c > 0)
+
+print('Finding EEZ at points (part 1)...')
+for yidx, xidx in tqdm(zip(coral_idx_w[0], coral_idx_w[1]), total=len(coral_idx_w[0])):
+    pos = Point(lon_rho_w[xidx], lat_rho_w[yidx])
+
+    # Check which EEZ the point intersects
+    eez_intersection = eez_file.geometry.intersects(pos)
+    eez_intersection = eez_intersection[eez_intersection == True]
+
+    if len(eez_intersection) != 1:
+        raise NotImplementedError('EEZ not found at location ' + lon_rho_w[xidx] + 'E, ' + lat_rho_w[yidx] + 'N!')
+
+    # Find the ISO code for that EEZ
+    iso_code = eez_file['UN_SOV1'][eez_intersection.index[0]]
+
+    # Uniquely identify Chagos (not making any suggestion about sovereignty, just to distinguish)
+    if iso_code == 480:
+        if lon_rho_w[xidx] > 65:
+            iso_code = 86
+
+    # Add to grid
+    eez_grid_w[yidx, xidx] = iso_code
+
+print('Finding EEZ at points (part 2)...')
+for yidx, xidx in tqdm(zip(coral_idx_c[0], coral_idx_c[1]), total=len(coral_idx_c[0])):
+    pos = Point(lon_rho_c[xidx], lat_rho_c[yidx])
+
+    # Check which EEZ the point intersects
+    eez_intersection = eez_file.geometry.intersects(pos)
+    eez_intersection = eez_intersection[eez_intersection == True]
+
+    if len(eez_intersection) != 1:
+        raise NotImplementedError('EEZ not found at location ' + lon_rho_c[xidx] + 'E, ' + lat_rho_c[yidx] + 'N!')
+
+    # Find the ISO code for that EEZ
+    iso_code = eez_file['UN_SOV1'][eez_intersection.index[0]]
+
+    # Uniquely identify Chagos (not making any suggestion about sovereignty, just to distinguish)
+    if iso_code == 480:
+        if lon_rho_w[xidx] > 65:
+            iso_code = 86
+
+    # Add to grid
+    eez_grid_c[yidx, xidx] = iso_code
+
+###############################################################################
+# Clustering ##################################################################
+###############################################################################
+
+# See https://scikit-learn.org/stable/auto_examples/cluster/plot_agglomerative_clustering.html
+# or https://scikit-learn.org/stable/auto_examples/cluster/plot_dbscan.html#sphx-glr-auto-examples-cluster-plot-dbscan-py
+# WIP!!
+n_clusters=30
+lon_w, lat_w = np.meshgrid(lon_rho_w, lat_rho_w)
+lon_w = lon_w[eez_grid_w == 690]
+lat_w = lat_w[eez_grid_w == 690]
+X = np.concatenate((lon_w, lat_w)).reshape((2,-1)).T
+knn_graph = kneighbors_graph(X, n_clusters, include_self=False)
+linkage='ward'
+model = AgglomerativeClustering(linkage=linkage, connectivity=knn_graph, n_clusters=n_clusters)
+model.fit(X)
+data_crs = ccrs.PlateCarree()
+
+f, ax = plt.subplots(1, 1, figsize=(10, 10), constrained_layout=True,
+                     subplot_kw={'projection': ccrs.PlateCarree()})
+ax.scatter(X[:,0], X[:,1], c=model.labels_, s=1, transform=data_crs)
+# ax.set_ylim([-17, -9])
+
+
+###############################################################################
 # Plot reef sites #############################################################
 ###############################################################################
 
 # Plot 'before'
-f, ax = plt.subplots(1, 1, figsize=(15, 10), constrained_layout=True)
-ax.pcolormesh(lon_psi_w, lat_psi_w, np.ma.masked_where(lsm_rho_w == 1, coral_grid_w_preshift)[1:-1, 1:-1],
-              norm=colors.LogNorm(vmin=1e3, vmax=1e7), cmap=cmr.flamingo_r)
-ax.pcolormesh(lon_psi_w, lat_psi_w, np.ma.masked_where(lsm_rho_w == 0, coral_grid_w_preshift)[1:-1, 1:-1],
-              norm=colors.LogNorm(vmin=1e3, vmax=1e7), cmap=cmr.ocean_r)
+f, ax = plt.subplots(1, 1, figsize=(24, 10), constrained_layout=True,
+                     subplot_kw={'projection': ccrs.PlateCarree()})
+
+data_crs = ccrs.PlateCarree()
+oceanc = ax.pcolormesh(lon_psi_w, lat_psi_w, np.ma.masked_where(lsm_rho_w == 1, coral_grid_w_preshift)[1:-1, 1:-1],
+                       norm=colors.LogNorm(vmin=1e2, vmax=1e8), cmap=cmr.flamingo_r, transform=data_crs)
+landc = ax.pcolormesh(lon_psi_w, lat_psi_w, np.ma.masked_where(lsm_rho_w == 0, coral_grid_w_preshift)[1:-1, 1:-1],
+                      norm=colors.LogNorm(vmin=1e2, vmax=1e8), cmap=cmr.freeze_r, transform=data_crs)
 ax.pcolormesh(lon_psi_w, lat_psi_w, np.ma.masked_where(coral_grid_w_preshift > 0, 1-lsm_rho_w)[1:-1, 1:-1],
-              vmin=-2, vmax=1, cmap=cmr.neutral)
-# f, ax = plt.subplots(1, 1, figsize=(15, 10), constrained_layout=True)
-# ax.pcolormesh(lon_psi_w, lat_psi_w, coral_grid_w[1:-1, 1:-1])
+              vmin=-2, vmax=1, cmap=cmr.neutral, transform=data_crs)
 
+gl = ax.gridlines(crs=data_crs, draw_labels=True, linewidth=1, color='gray', linestyle='-')
+gl.xlocator = mticker.FixedLocator(np.arange(35, 95, 5))
+gl.ylocator = mticker.FixedLocator(np.arange(-25, 5, 5))
+gl.ylabels_right = False
+gl.xlabels_top = False
 
+ax.set_xlim([34.62, 77.5])
+ax.set_ylim([-23.5, 0])
+ax.spines['geo'].set_linewidth(1)
+ax.set_ylabel('Latitude')
+ax.set_xlabel('Longitude')
+ax.set_title('Coral cells on WINDS grid (preproc)')
 
+cax1 = f.add_axes([ax.get_position().x1+0.07,ax.get_position().y0-0.10,0.015,ax.get_position().height+0.196])
+cax2 = f.add_axes([ax.get_position().x1+0.12,ax.get_position().y0-0.10,0.015,ax.get_position().height+0.196])
 
+cb1 = plt.colorbar(oceanc, cax=cax1, pad=0.1)
+cb1.set_label('Coral surface area in ocean cell (m2)', size=12)
+cb2 = plt.colorbar(landc, cax=cax2, pad=0.1)
+cb2.set_label('Coral surface area in land cell (m2)', size=12)
 
+ax.set_aspect('equal', adjustable=None)
+ax.margins(x=-0.01, y=-0.01)
 
-# f, ax = plt.subplots(1, 1, figsize=(15, 10), constrained_layout=True)
-# ax.pcolormesh(lon_rho_c, lat_rho_c, coral_grid_c)
+plt.savefig(fh['fig'] + '_WINDS_preproc.png', dpi=300)
+
+f, ax = plt.subplots(1, 1, figsize=(24, 10), constrained_layout=True,
+                     subplot_kw={'projection': ccrs.PlateCarree()})
+
+data_crs = ccrs.PlateCarree()
+oceanc = ax.pcolormesh(lon_rho_c, lat_rho_c, np.ma.masked_where(lsm_psi_c == 1, coral_grid_c_preshift),
+                       norm=colors.LogNorm(vmin=1e2, vmax=1e9), cmap=cmr.flamingo_r, transform=data_crs)
+landc = ax.pcolormesh(lon_rho_c, lat_rho_c, np.ma.masked_where(lsm_psi_c == 0, coral_grid_c_preshift),
+                      norm=colors.LogNorm(vmin=1e2, vmax=1e9), cmap=cmr.freeze_r, transform=data_crs)
+ax.pcolormesh(lon_rho_c, lat_rho_c, np.ma.masked_where(coral_grid_c_preshift > 0, 1-lsm_psi_c),
+              vmin=-2, vmax=1, cmap=cmr.neutral, transform=data_crs)
+
+gl = ax.gridlines(crs=data_crs, draw_labels=True, linewidth=1, color='gray', linestyle='-')
+gl.xlocator = mticker.FixedLocator(np.arange(35, 95, 5))
+gl.ylocator = mticker.FixedLocator(np.arange(-25, 5, 5))
+gl.ylabels_right = False
+gl.xlabels_top = False
+
+ax.set_xlim([34.62, 77.5])
+ax.set_ylim([-23.5, 0])
+ax.spines['geo'].set_linewidth(1)
+ax.set_ylabel('Latitude')
+ax.set_xlabel('Longitude')
+ax.set_title('Coral cells on CMEMS grid (preproc)')
+
+cax1 = f.add_axes([ax.get_position().x1+0.07,ax.get_position().y0-0.10,0.015,ax.get_position().height+0.196])
+cax2 = f.add_axes([ax.get_position().x1+0.12,ax.get_position().y0-0.10,0.015,ax.get_position().height+0.196])
+
+cb1 = plt.colorbar(oceanc, cax=cax1, pad=0.1)
+cb1.set_label('Coral surface area in ocean cell (m2)', size=12)
+cb2 = plt.colorbar(landc, cax=cax2, pad=0.1)
+cb2.set_label('Coral surface area in land cell (m2)', size=12)
+
+ax.set_aspect('equal', adjustable=None)
+ax.margins(x=-0.01, y=-0.01)
+
+plt.savefig(fh['fig'] + '_CMEMS_preproc.png', dpi=300)
+
+# Plot 'after'
+f, ax = plt.subplots(1, 1, figsize=(24, 10), constrained_layout=True,
+                     subplot_kw={'projection': ccrs.PlateCarree()})
+
+data_crs = ccrs.PlateCarree()
+coral = ax.pcolormesh(lon_psi_w, lat_psi_w, np.ma.masked_where(coral_grid_w == 0, coral_grid_w)[1:-1, 1:-1],
+                       norm=colors.LogNorm(vmin=1e2, vmax=1e8), cmap=cmr.flamingo_r, transform=data_crs)
+ax.pcolormesh(lon_psi_w, lat_psi_w, np.ma.masked_where(lsm_rho_w == 0, 1-lsm_rho_w)[1:-1, 1:-1],
+              vmin=-2, vmax=1, cmap=cmr.neutral, transform=data_crs)
+
+gl = ax.gridlines(crs=data_crs, draw_labels=True, linewidth=1, color='gray', linestyle='-')
+gl.xlocator = mticker.FixedLocator(np.arange(35, 95, 5))
+gl.ylocator = mticker.FixedLocator(np.arange(-25, 5, 5))
+gl.ylabels_right = False
+gl.xlabels_top = False
+
+ax.set_xlim([34.62, 77.5])
+ax.set_ylim([-23.5, 0])
+ax.spines['geo'].set_linewidth(1)
+ax.set_ylabel('Latitude')
+ax.set_xlabel('Longitude')
+ax.set_title('Coral cells on WINDS grid (postproc)')
+
+cax1 = f.add_axes([ax.get_position().x1+0.07,ax.get_position().y0-0.10,0.015,ax.get_position().height+0.196])
+
+cb1 = plt.colorbar(oceanc, cax=cax1, pad=0.1)
+cb1.set_label('Coral surface area in cell (m2)', size=12)
+
+ax.set_aspect('equal', adjustable=None)
+ax.margins(x=-0.01, y=-0.01)
+
+plt.savefig(fh['fig'] + '_WINDS_postproc.png', dpi=300)
+
+f, ax = plt.subplots(1, 1, figsize=(24, 10), constrained_layout=True,
+                     subplot_kw={'projection': ccrs.PlateCarree()})
+
+data_crs = ccrs.PlateCarree()
+coral = ax.pcolormesh(lon_rho_c, lat_rho_c, np.ma.masked_where(lsm_psi_c == 1, coral_grid_c),
+                       norm=colors.LogNorm(vmin=1e2, vmax=1e9), cmap=cmr.flamingo_r, transform=data_crs)
+ax.pcolormesh(lon_rho_c, lat_rho_c, np.ma.masked_where(lsm_psi_c == 0, 1-lsm_psi_c),
+              vmin=-2, vmax=1, cmap=cmr.neutral, transform=data_crs)
+
+gl = ax.gridlines(crs=data_crs, draw_labels=True, linewidth=1, color='gray', linestyle='-')
+gl.xlocator = mticker.FixedLocator(np.arange(35, 95, 5))
+gl.ylocator = mticker.FixedLocator(np.arange(-25, 5, 5))
+gl.ylabels_right = False
+gl.xlabels_top = False
+
+ax.set_xlim([34.62, 77.5])
+ax.set_ylim([-23.5, 0])
+ax.spines['geo'].set_linewidth(1)
+ax.set_ylabel('Latitude')
+ax.set_xlabel('Longitude')
+ax.set_title('Coral cells on CMEMS grid (postproc)')
+
+cax1 = f.add_axes([ax.get_position().x1+0.07,ax.get_position().y0-0.10,0.015,ax.get_position().height+0.196])
+
+cb1 = plt.colorbar(oceanc, cax=cax1, pad=0.1)
+cb1.set_label('Coral surface area in cell (m2)', size=12)
+
+ax.set_aspect('equal', adjustable=None)
+ax.margins(x=-0.01, y=-0.01)
+
+plt.savefig(fh['fig'] + '_CMEMS_postproc.png', dpi=300)
+
 
