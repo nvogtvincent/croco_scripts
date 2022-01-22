@@ -194,47 +194,27 @@ def release_time(param, **kwargs):
         start_mode = True
         print('Releasing at end of month...')
 
-    Years  = [param['Ymin'], param['Ymax']]
-    Months = [param['Mmin'], param['Mmax']]
-    RPM    = param['RPM']
-    t0     = int(param['t0'])
+    Year  = param['Y']
+    Month = param['M']
+    RPM   = param['RPM']
+    release = param['release']
 
-    Years = np.arange(Years[0], Years[1]+1)
-    nyears = Years.shape[0]
-    ntime = ((nyears*12) + ((Months[1] - Months[0]) - 11))*RPM
+    days_in_month = monthrange(Year, Month)[-1]
 
-    time = np.zeros((ntime,), dtype=np.int32)
+    if start_mode:
+        release_day = np.linspace(0, days_in_month, num=RPM+1)[:-1][release]
+    else:
+        release_day = np.linspace(0, days_in_month, num=RPM+1)[1:][release]
 
-    pos, cumtime = 0, 0
-
-    for yi in range(nyears):
-        # Calculate number of months in this year
-        m0 = Months[0] if yi == 0 else 1
-        m1 = Months[1] if yi == nyears-1 else 12
-
-        for mi in range(m0, m1+1):
-            # Calculate release days in month
-            days = monthrange(Years[yi], mi)[-1]
-
-            if start_mode:
-                daysi = np.linspace(0, days, num=RPM+1)[:-1]
-            else:
-                daysi = np.linspace(0, days, num=RPM+1)[1:]
-
-            time[pos*RPM:(pos+1)*RPM] = daysi*86400 + cumtime
-
-            pos += RPM
-            cumtime += days*86400
-
-    time -= t0
+    release_time = datetime(year=Year, month=Month, day=1) + timedelta(days=release_day)
 
     try:
         if param['delay_start']:
-            time += 3600*12
+            release_time = release_time + timedelta(hours=12)
     except:
         pass
 
-    return time
+    return release_time
 
 
 def release_loc_ocean(param, fh):
@@ -261,6 +241,9 @@ def release_loc_ocean(param, fh):
 
     marine_release_loc = np.ones_like(id_psi, dtype=np.int32)
 
+    plt.imshow(lsm_psi)
+    plt.scatter(2819, 934)
+
     # Mask with limits
     y_idx_max = np.searchsorted(lat_psi, param['lat_north'])
     y_idx_min = np.searchsorted(lat_psi, param['lat_south'])
@@ -271,6 +254,12 @@ def release_loc_ocean(param, fh):
     marine_release_loc[y_idx_max:, :] = 0
     marine_release_loc[:, :x_idx_min] = 0
     marine_release_loc[:, x_idx_max:] = 0
+
+    # Remove Mediterranean
+    x_idx_max_med = np.searchsorted(lon_psi, 60)
+    y_idx_min_med = np.searchsorted(lat_psi, 30)
+
+    marine_release_loc[y_idx_min_med:, :x_idx_max_med] = 0
 
     # Mask with lsm
     marine_release_loc *= (1-lsm_psi)
@@ -298,6 +287,7 @@ def release_loc_ocean(param, fh):
 
     # Calculate the total number of particles
     nl  = idx[0].shape[0]  # Number of locations
+    id_list = id_psi[tuple(idx)]
 
     pn_cell = pn**2
     pn_tot = nl*pn_cell
@@ -675,29 +665,12 @@ def add_times(particles, param):
     data  = particles['loc_array']
     times = particles['time_array']
 
-    ntimes = times.shape[0]
     npart  = data['lon'].shape[0]
-
-    data['lon']  = np.tile(data['lon'], ntimes)
-    data['lat']  = np.tile(data['lat'], ntimes)
-    data['id']   = np.tile(data['id'], ntimes)
     data['time'] = np.repeat(times, npart)
-
-    try:
-        data['gfw']   = np.tile(data['gfw'], ntimes)
-    except:
-        pass
-
-    try:
-        data['iso']  = np.tile(data['iso'], ntimes)
-        data['cp0']   = np.tile(data['cp0'], ntimes)
-        data['rp0']   = np.tile(data['rp0'], ntimes)
-    except:
-        pass
 
     # Also now calculation partitioning of particles
     if param['total_partitions'] > 1:
-        pn_per_part = int(np.ceil(npart*ntimes/param['total_partitions']))
+        pn_per_part = int(np.ceil(npart/param['total_partitions']))
         i0 = pn_per_part*param['partition']
         i1 = pn_per_part*(param['partition']+1)
 
