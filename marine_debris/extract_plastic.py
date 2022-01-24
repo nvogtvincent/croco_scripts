@@ -8,10 +8,14 @@ Script to read event data from forward marine debris simulations
 import os
 import numpy as np
 import pandas as pd
+import time
+from numba import njit
 from netCDF4 import Dataset
 from datetime import datetime
 from glob import glob
-import time
+from tqdm import tqdm
+
+
 
 ##############################################################################
 # DIRECTORIES & PARAMETERS                                                   #
@@ -25,8 +29,11 @@ param = { # Runtime parameters
          'ls_d': 3650,    # Sinking timescale (days)
          'lb_d': 40,      # Beaching timescale (days)
 
+         'y0'  : 1993,
+         'y1'  : 1993,
+
          # Mode
-         'mode': 'land'   # Options: land/marine
+         'mode_name': 'marine'   # Options: land/marine
          }
 
 # DIRECTORIES
@@ -47,7 +54,7 @@ fh = {'grid':    dirs['grid'] + 'griddata.nc',
 param['ls'] = 1/(param['ls_d']*3600*24)
 param['lb'] = 1/(param['lb_d']*3600*24)
 
-if param['mode'] == 'land':
+if param['mode_name'] == 'land':
     param['mode'] = True
 else:
     param['mode'] = False
@@ -85,6 +92,33 @@ def translate_events(array):
 
     return [sink_id, time_at_sink, prior_tb, prior_ts]
 
+@njit
+def translate_events_para(array):
+    # Create output arrays
+    sink_id = np.zeros_like(array, dtype=np.int8)
+    time_at_sink = np.zeros_like(array, dtype=np.int32)
+    prior_tb = np.zeros_like(array, dtype=np.int32)
+    prior_ts = np.zeros_like(array, dtype=np.int32)
+
+    # Generate useful numbers for translation
+    p0 = 2**20
+    p1 = 2**40
+    p2 = 2**52
+
+    for row in range(len(sink_id)):
+        code = array[row]
+        val3 = int(code%p0)
+        val2 = int(((code-val3)%p1)/p0)
+        val1 = int(((code-val2)%p2)/p1)
+        val0 = int((code-val2)/p2)
+
+        sink_id[row] = val0
+        time_at_sink[row] = val1
+        prior_tb[row] = val2
+        prior_ts[row] = val3
+
+    return sink_id, time_at_sink, prior_tb, prior_ts
+
 
 def convert_events(fh_list, dt, ls, lb, n_events, **kwargs):
     '''
@@ -117,8 +151,7 @@ def convert_events(fh_list, dt, ls, lb, n_events, **kwargs):
     data_list = []
 
     # Open all data
-    for fhi, fh in enumerate(fh_list):
-        print(str(100*fhi/len(fh_list))+'%')
+    for fhi, fh in tqdm(enumerate(fh_list), total=len(fh_list)):
         with Dataset(fh, mode='r') as nc:
             e_num = nc.variables['e_num'][:]
             n_traj = np.shape(e_num)[0] # Number of trajectories in file
@@ -131,19 +164,20 @@ def convert_events(fh_list, dt, ls, lb, n_events, **kwargs):
 
                 # Firstly load primary variables into memory
                 raw_event_array = np.zeros((n_traj, n_events), dtype=np.int64)
-                raw_source_cell_array = np.zeros((n_traj, n_events), dtype=np.int32)
 
                 if param['mode']:
+                    raw_source_cell_array = np.zeros((n_traj, n_events), dtype=np.int32)
                     raw_rp0_array = np.zeros((n_traj, n_events), dtype=np.float32)
                     raw_cp0_array = np.zeros((n_traj, n_events), dtype=np.float32)
                     raw_source_id_array = np.zeros((n_traj, n_events), dtype=np.int16)
+                    raw_source_cell_array[:] = nc.variables['source_cell'][:]
                 else:
-                    raw_gfw_num_array = np.zeros((n_traj, n_events), dtype=np.int32)
+                    # raw_gfw_num_array = np.zeros((n_traj, n_events), dtype=np.int32)
+                    raw_lat0_array = np.zeros((n_traj, n_events), dtype=np.float32)
+                    raw_lon0_array = np.zeros((n_traj, n_events), dtype=np.float32)
 
                 for i in range(n_events):
                     raw_event_array[:, i] = nc.variables['e' + str(i)][:, 0]
-
-                raw_source_cell_array[:] = nc.variables['source_cell'][:]
 
                 # Divide plastic fluxes by 12 to convert kg/yr -> kg/mo
                 if param['mode']:
@@ -151,7 +185,9 @@ def convert_events(fh_list, dt, ls, lb, n_events, **kwargs):
                     raw_rp0_array[:] = nc.variables['rp0'][:]/12
                     raw_cp0_array[:] = nc.variables['cp0'][:]/12
                 else:
-                    raw_gfw_num_array[:] = nc.variables['gfw_num'][:]
+                    raw_lat0_array[:] = nc.variables['lat0'][:]
+                    raw_lon0_array[:] = nc.variables['lon0'][:]
+                    # raw_gfw_num_array[:] = nc.variables['gfw_num'][:]
 
                 # Update stats
                 total_particles += n_traj
@@ -163,10 +199,10 @@ def convert_events(fh_list, dt, ls, lb, n_events, **kwargs):
                 mask = raw_event_array != 0
                 raw_event_array = raw_event_array[mask]
 
-                raw_source_cell_array = raw_source_cell_array.flatten()
-                raw_source_cell_array = raw_source_cell_array[mask]
-
                 if param['mode']:
+                    raw_source_cell_array = raw_source_cell_array.flatten()
+                    raw_source_cell_array = raw_source_cell_array[mask]
+
                     raw_source_id_array = raw_source_id_array.flatten()
                     raw_source_id_array = raw_source_id_array[mask]
 
@@ -176,9 +212,11 @@ def convert_events(fh_list, dt, ls, lb, n_events, **kwargs):
                     raw_cp0_array = raw_cp0_array.flatten()
                     raw_cp0_array = raw_cp0_array[mask]
                 else:
-                    raw_gfw_num_array = raw_gfw_num_array.flatten()
-                    raw_gfw_num_array = raw_gfw_num_array[mask]
+                    raw_lat0_array = raw_lat0_array.flatten()
+                    raw_lat0_array = raw_lat0_array[mask]
 
+                    raw_lon0_array = raw_lon0_array.flatten()
+                    raw_lon0_array = raw_lon0_array[mask]
 
                 # Now convert events
                 sink_array = np.zeros_like(raw_event_array, dtype=np.int8)
@@ -186,7 +224,7 @@ def convert_events(fh_list, dt, ls, lb, n_events, **kwargs):
                 prior_tb_array = np.zeros_like(raw_event_array, dtype=np.int32)
                 prior_ts_array = np.zeros_like(raw_event_array, dtype=np.int32)
 
-                converted_arrays = translate_events(raw_event_array)
+                converted_arrays = translate_events_para(raw_event_array)
 
                 sink_array[:] = converted_arrays[0]
                 time_at_sink_array[:] = converted_arrays[1]*dt
@@ -200,16 +238,21 @@ def convert_events(fh_list, dt, ls, lb, n_events, **kwargs):
                 loss = loss.astype('float32')
 
                 # Now form output array
-                frame = pd.DataFrame(data=raw_source_cell_array, columns=['source_cell'])
+                frame = pd.DataFrame(data=sink_array, columns=['sink_id'])
 
                 if param['mode']:
+                    x_idx_source = raw_source_cell_array%10000
+                    y_idx_source = (raw_source_cell_array-x_idx_source)/10000
+                    frame['source_x_idx'] = x_idx_source
+                    frame['source_y_idx'] = y_idx_source
                     frame['plastic_flux'] = loss*(raw_rp0_array + raw_cp0_array)
                     frame['source_id'] = raw_source_id_array
                 else:
                     frame['plastic_flux'] = loss
-                    frame['gfw_num'] = raw_gfw_num_array
+                    frame['lon0'] = raw_lon0_array
+                    frame['lat0'] = raw_lat0_array
 
-                frame['sink_id'] = sink_array
+                # frame['sink_id'] = sink_array
                 frame['days_at_sea'] = prior_ts_array
                 frame['days_at_sea'] = pd.to_timedelta(frame['days_at_sea'], unit='S')
                 frame['sink_date'] = frame['days_at_sea'] + t0
@@ -231,13 +274,17 @@ def convert_events(fh_list, dt, ls, lb, n_events, **kwargs):
                                       'source_year': 'int16',
                                       'source_month': 'int8'})
 
+                if param['mode']:
+                    frame = frame.astype({'source_x_idx': 'int16',
+                                          'source_y_idx': 'int16',
+                                          'source_id': 'int64'})
                 # Append
                 data_list.append(frame)
 
     data = pd.concat(data_list, axis=0)
     data.reset_index(drop=True)
 
-    if (data['days_at_sea'].max() > 3660) or (data['days_at_sea'].max() < 3600):
+    if (data['days_at_sea'].max() > 3660) or (data['days_at_sea'].max() < 3640):
         print('WARNING: ARE YOU SURE THAT THE TIMESTEP IS CORRECT?')
         print('max: ' + str(data['days_at_sea'].max()) + ' days')
 
@@ -257,14 +304,11 @@ def convert_events(fh_list, dt, ls, lb, n_events, **kwargs):
 
     return data, stats
 
-
-
-t0 = time.time()
-for year in np.arange(1993, 2010):
+for year in np.arange(param['y0'], param['y1']+1):
+    print('Year ' + str(year) + '/' + str(param['y1']))
     year_fh = sorted(glob(dirs['traj'] + str(year) + '*.nc'))
-    save_fh = dirs['traj'] + 'data_s' + str(param['ls_d']) + '_b' + str(param['lb_d']) + '_' + str(year) + '.pkl'
-    data, stats = convert_events(year_fh, param['dt'], param['ls'], param['lb'], 20,
-                                 particles_per_file=646456, save_data=True,
+    save_fh = dirs['traj'] + param['mode_name'] + '_data_s' + str(param['ls_d']) + '_b' + str(param['lb_d']) + '_' + str(year) + '.pkl'
+    data, stats = convert_events(year_fh, param['dt'], param['ls'], param['lb'], 25,
+                                 particles_per_file=627689, save_data=True,
                                  save_fh=save_fh)
     print(stats)
-print('Run time: ' + str(time.time() - t0) + 's')
