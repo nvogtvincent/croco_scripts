@@ -27,26 +27,29 @@ from sys import argv
 try:
     y_in = int(argv[1])
     m_in = int(argv[2])
-    rel_in = int(argv[3])
-    tot_part = int(argv[4])
-    part = int(argv[5])
+    rpm_in = int(argv[3])
+    rel_in = int(argv[4])
+    tot_part = int(argv[5])
+    part = int(argv[6])
 except:
     y_in = 2019
     m_in = 10
+    rpm_in = 4
     rel_in = 0
     tot_part = 42
     part = 0        # (0...tot_part-1)
+    print('USING DEFAULT VALUES!')
 
 # PARAMETERS
 param = {# Release timing
          'Y'                 : y_in,          # Release year
          'M'                 : m_in,          # Release month (1..)
          'mode'              :'START',        # Release at END or START
-         'RPM'               : 2,             # Releases per month
+         'RPM'               : rpm_in,             # Releases per month
          'release'           : rel_in,        # Release (0..RPM-1)
 
          # Seeding strategy
-         'pn'                : 10,            # Particles per cell (sqrt)
+         'pn'                : 6,            # Particles per cell (sqrt)
          'lon_west'          : 20,
          'lon_east'          : 130,
          'lat_south'         : -40,
@@ -65,11 +68,10 @@ param = {# Release timing
          # Runtime parameters
          'Yend'              : y_in+10,                # Last year of simulation
          'Mend'              : m_in   ,                # Last month
-         'Dend'              : 2   ,                   # Last day (00:00, start)
          'dt_RK4'            : timedelta(minutes=60),  # RK4 time-step
 
          # Output parameters
-         'fn_out'            : str(y_in) + '_' + str(m_in) + '_' + str(part) + '_FwdMar0000.nc',  # Output filename
+         'fn_out'            : str(y_in) + '_' + str(m_in) + '_' + str(rel_in) + '_' + str(part) + '_FwdMar0000.nc',  # Output filename
 
          # Partitioning
          'total_partitions'  : tot_part,
@@ -104,12 +106,6 @@ fh = {'ocean':   sorted(glob(dirs['model'] + 'OCEAN_*.nc')),
       'fish':    dirs['fish'] + 'GFW_gridded_2016_2019.nc',
       'traj':    dirs['traj'] + param['fn_out'],}
 
-# MODIFICATION TO PREVENT CRASHING IF END_YR=1993
-if param['Yend'] <= 1993:
-    param['Yend'] = 1993
-    param['Mend'] = 1
-    param['Dend'] = 2
-
 if (param['Y'] == 1993)*(param['M'] == 1)*(param['release']==0):
     param['delay_start'] = True
 else:
@@ -117,6 +113,8 @@ else:
 
 if param['max_age'] == 0:
     param['max_age'] = 1e20
+
+param['max_age'] = param['max_age']*3600*24*365
 
 ##############################################################################
 # SET UP PARTICLE RELEASES                                                   #
@@ -133,7 +131,7 @@ with Dataset(fh['ocean'][0], 'r') as nc:
     # provided files
     if (datetime(year=param['Yend'],
                  month=param['Mend'],
-                 day=param['Dend']) - param['t0']).total_seconds() < 0:
+                 day=1) - param['t0']).total_seconds() < 0:
         raise FileNotFoundError('File input does not span simulation time')
 
 grid = mdm.gridgen(fh, dirs, param, plastic=True, add_seychelles=True)
@@ -143,6 +141,11 @@ particles = {'time_array' : mdm.release_time(param, mode=param['mode'])}
 
 # Add the end time
 param['endtime'] = datetime(year=param['Yend'], month=param['Mend'], day=particles['time_array'].day+2)
+
+if param['endtime'].year > 2019:
+    param['endtime'] = datetime(year=2019, month=12, day=31, hour=12)
+    param['max_age'] = param['endtime'] - particles['time_array']
+    param['max_age'] = param['max_age'].total_seconds()
 
 # Calculate the locations, ids, procs for particle releases
 if not param['test']:
@@ -314,7 +317,7 @@ if param['Kh']:
     fieldset.add_constant_field('Kh_meridional', param['Kh'], mesh='spherical')
 
 # ADD MAXIMUM PARTICLE AGE (IF LIMITED AGE)
-fieldset.add_constant('max_age', param['max_age']*3600*24*365)
+fieldset.add_constant('max_age', param['max_age'])
 
 # SET SEED
 ParcelsRandom.seed(690)

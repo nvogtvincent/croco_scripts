@@ -293,7 +293,7 @@ def release_loc_ocean(param, fh):
     pn_tot = nl*pn_cell
 
     print('')
-    print('Total number of particles generated per relase: ' + str(pn_tot))
+    print('Total number of particles generated per release: ' + str(pn_tot))
 
     dX = lon_rho[1] - lon_rho[0]  # Grid spacing
 
