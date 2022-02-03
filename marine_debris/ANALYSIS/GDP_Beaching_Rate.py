@@ -15,17 +15,12 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.colors as colors
 import cmasher as cmr
-import matplotlib.ticker as mticker
-import cartopy.crs as ccrs
-import cartopy.feature as cfeature
 import geopandas as gpd
 import pandas as pd
 import xarray as xr
-from osgeo import gdal, osr
+from scipy.linalg import lstsq
 from glob import glob
-from osgeo import gdal
 from tqdm import tqdm
-from netCDF4 import Dataset, num2date
 from shapely.geometry import Point
 
 
@@ -38,7 +33,8 @@ from shapely.geometry import Point
 # 4. Calculate F(beach) as a function of cumulative time within 1/12 of the coast
 
 # PARAMETERS
-param = {'vel_max': 60*100/(3600*6)} # Based on a drifter swinging in a 60m radius
+param = {'vel_max': 60*100/(3600*6), # Based on a drifter swinging in a 60m radius
+         'beaching_p_thresh': 0.50}  # Threshold for drifter to count as 'beached'
 
 # DIRECTORIES
 dirs = {'script': os.path.dirname(os.path.realpath(__file__)),
@@ -47,7 +43,9 @@ dirs = {'script': os.path.dirname(os.path.realpath(__file__)),
         'fig': os.path.dirname(os.path.realpath(__file__)) + '/../FIGURES/'}
 
 # FILE HANDLES
-fh = {'gdp': sorted(glob(dirs['gdp'] + 'bd*.dat')),
+fh = {'gdp': sorted(glob(dirs['gdp'] + 'buoydata*.dat')),
+      'gdp_meta': sorted(glob(dirs['gdp'] + 'meta/dirfl*.dat.txt')),
+      'gdp_beaching_p': dirs['gdp'] + 'meta/beaching_p.dat',
       'gebco': dirs['grid'] + 'LOC/gebco_2021/GEBCO_2021.nc',
       'coast_005deg': dirs['grid'] + 'LOC/coastal_mask/coastal_mask_005.gpkg',
       'coast_083deg': dirs['grid'] + 'LOC/coastal_mask/GSHHS_h_L1_buffer083_res01.tif',
@@ -70,6 +68,10 @@ coast5_obj = gpd.read_file(fh['coast_005deg'])
 # Load GEBCO bathymetry #######################################################
 bath_data = xr.open_dataset(fh['gebco'])
 
+# Load overarching metadata
+beaching_p = pd.read_csv(fh['gdp_beaching_p'], sep='\s+', header=None,
+                         usecols=[0, 7], names=['ID', 'beaching_p'])
+
 ###############################################################################
 # ANALYSE GDP TRAJECTORIES ####################################################
 ###############################################################################
@@ -78,9 +80,7 @@ bath_data = xr.open_dataset(fh['gebco'])
 stats = {'rejected_latitude': 0,  # Rejected due to latitude bounds
          'rejected_no_coast': 0,  # Rejected due to no coastal intercept
          'coast_no_beach': 0,     # Valid, no beaching event
-         'coast_beach_prox': 0,   # Valid, beaching event via proximity criterion
-         'coast_beach_depth': 0,  # Valid, beaching event via depth criterion
-         'coast_beach_both': 0,}  # Valid, beaching event via both criteria
+         'coast_beach': 0}        # Valid, beaching event
 
 coast_time = []   # Cumulative time spent at coast by trajectory (s)
 beach_status = [] # Beaching status: 0 = no beach
@@ -89,11 +89,15 @@ beach_status = [] # Beaching status: 0 = no beach
                   #                  3 = proximity + depth beach
 
 
-for gdp_fh in fh['gdp']:
-    # Read file
+for gdp_fh, gdp_meta_fh in zip(fh['gdp'], fh['gdp_meta']):
+    # Read files
     df = pd.read_csv(gdp_fh, sep='\s+', header=None,
                      usecols=[0, 4, 5, 9],
                      names=['ID', 'lat', 'lon', 'vel'],)
+
+    dfm = pd.read_csv(gdp_meta_fh, sep='\s+', header=None,
+                      usecols=[0, 14],
+                      names=['ID', 'death_code'],)
 
     # Change longitude from 0-360 -> -180-180
     lon_ = df['lon'].values
@@ -134,7 +138,15 @@ for gdp_fh in fh['gdp']:
                                              method='linear')['elevation'].values
                 depth_beach = True if end_depth > -30 else False
 
-                if proximity_beach or depth_beach:
+                # Test metadata criterion
+                if len(beaching_p.loc[beaching_p['ID']==drifter_id]):
+                    # Firstly test if in beaching likelihood file
+                    meta_beach = beaching_p['beaching_p'].loc[beaching_p['ID']==drifter_id].values[0] > param['beaching_p_thresh']
+                else:
+                    # Otherwise just use death code
+                    meta_beach = dfm['death_code'].loc[dfm['ID']==drifter_id].values[0] == 1
+
+                if proximity_beach + depth_beach + meta_beach:
                     # If trajectory has beached, try to determine when exactly it
                     # beached (assume drifter is swinging in a 60m radius)
                     #
@@ -214,7 +226,18 @@ for i in range(len(time_array)):
     else:
         f_unbeached[i] = n_unbeached_drifters_per_ct_bin[i]/n_drifters_per_ct_bin[i]
 
-plt.scatter(time_array, f_unbeached)
+# Now calculate lambda:
+# F(t) = exp(-lambda*t) -> lambda : slope of ln(F(t)) against t
+M = time_array[:, np.newaxis]
+p, res, rnk, s = lstsq(M, np.log(f_unbeached))
+l_c = -p
+
+t_model = np.linspace(0, 20, num=11)
+f_model = np.exp(-l_c*t_model)
+
+f, a0 = plt.subplots(1, 1, figsize=(8, 8))
+a0.scatter(time_array, f_unbeached, marker='.', c='k')
+a0.plot(t_model, f_model, c='r', linestyle='--')
 
 
 
