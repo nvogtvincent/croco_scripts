@@ -27,22 +27,26 @@ from sys import argv
 try:
     y_in = int(argv[1])
     m_in = int(argv[2])
-    tot_part = int(argv[3])
-    part = int(argv[4])
+    rpm_in = int(argv[3])
+    rel_in = int(argv[4])
+    tot_part = int(argv[5])
+    part = int(argv[6])
 except:
     y_in = 2019
-    m_in = 9
-    tot_part = 1
-    part = 0
+    m_in = 10
+    rpm_in = 4
+    rel_in = 0
+    tot_part = 42
+    part = 0        # (0...tot_part-1)
+    print('USING DEFAULT VALUES!')
 
 # PARAMETERS
 param = {# Release timing
-         'Ymin'              : y_in,          # First release year
-         'Ymax'              : y_in,          # Last release year
-         'Mmin'              : m_in,          # First release month
-         'Mmax'              : m_in,           # Last release month
+         'Y'                 : y_in,          # Release year
+         'M'                 : m_in,          # Release month (1..)
          'mode'              :'START',        # Release at END or START
-         'RPM'               : 1,             # Releases per month
+         'RPM'               : rpm_in,             # Releases per month
+         'release'           : rel_in,        # Release (0..RPM-1)
 
          # Seeding strategy
          'threshold'         : 1e2,           # Minimum plastic threshold (kg)
@@ -53,19 +57,18 @@ param = {# Release timing
 
          # Simulation parameters
          'stokes'            : True,          # Toggle to use Stokes drift
-         'windage'           : False,         # Toggle to use windage
-         'fw'                : 0.0,           # Windage fraction (0.5/1.0/2.0/3.0)
+         'windage'           : False,          # Toggle to use windage
+         'fw'                : 0.0,           # Windage fraction
          'Kh'                : 10.,           # Horizontal diffusion coefficient (m2/s, 0 = off)
-         'max_age'           : 10.,           # Max age (years). 0 == inf.
+         'max_age'           : 10,            # Max age (years). 0 == inf.
 
          # Runtime parameters
          'Yend'              : y_in+10,                # Last year of simulation
          'Mend'              : m_in   ,                # Last month
-         'Dend'              : 2   ,                   # Last day (00:00, start)
          'dt_RK4'            : timedelta(minutes=60),  # RK4 time-step
 
          # Output parameters
-         'fn_out'            : str(y_in) + '_' + str(m_in) + '_' + str(part) + '_Fwd0000.nc',  # Output filename
+         'fn_out'            : str(y_in) + '_' + str(m_in) + '_' + str(rel_in) + '_' + str(part) + '_FwdLand0000.nc',  # Output filename
 
          # Partitioning
          'total_partitions'  : tot_part,
@@ -76,13 +79,14 @@ param = {# Release timing
          'add_sey'           : True,                   # Add extra Sey islands
          'plot_input'        : False,                  # Plot plastic input
 
-         'p_param'           : {'l'  : 25.,            # Plastic length scale
-                                'cr' : 0.25},          # Fraction entering sea
+         'p_param'           : {'l'  : 15.,            # Plastic length scale
+                                'cr' : 1.0},           # Fraction entering sea
 
          # Testing parameters
          'test'              : False,                  # Activate test mode
          'line_rel'          : False,                  # Release particles in line
          'dt_out'            : timedelta(minutes=60),} # Output frequency (testing only)
+
 
 # DIRECTORIES
 dirs = {'script': os.path.dirname(os.path.realpath(__file__)),
@@ -100,18 +104,15 @@ fh = {'ocean':   sorted(glob(dirs['model'] + 'OCEAN_*.nc')),
       'fig':     dirs['fig'] + 'plastic_input',
       'traj':    dirs['traj'] + param['fn_out'],}
 
-# MODIFICATION TO PREVENT CRASHING IF END_YR=1993
-if param['Yend'] <= 1993:
-    param['Yend'] = 1993
-    param['Mend'] = 1
-    param['Dend'] = 2
-
-if param['Ymin'] == 1993:
-    if param['Mmin'] == 1:
-        param['delay_start'] = True
+if (param['Y'] == 1993)*(param['M'] == 1)*(param['release']==0):
+    param['delay_start'] = True
+else:
+    param['delay_start'] = False
 
 if param['max_age'] == 0:
     param['max_age'] = 1e20
+
+param['max_age'] = param['max_age']*3600*24*365
 
 ##############################################################################
 # SET UP PARTICLE RELEASES                                                   #
@@ -128,27 +129,21 @@ with Dataset(fh['ocean'][0], 'r') as nc:
     # provided files
     if (datetime(year=param['Yend'],
                  month=param['Mend'],
-                 day=param['Dend']) - param['t0']).total_seconds() < 0:
+                 day=1) - param['t0']).total_seconds() < 0:
         raise FileNotFoundError('File input does not span simulation time')
-
-    # Calculate the offset in seconds for the first ocean frame
-    # Ocean time = seconds from start of first year
-    # Parcels time = seconds from start of first frame
-    # t0 = Ocean time - Parcels time
-
-    param['t0'] = (param['t0'] - datetime(year=param['Ymin'],
-                                          month=param['Mmin'],
-                                          day=1)).total_seconds()
-
-    # Add the end time
-    param['endtime'] = datetime(year=param['Yend'],
-                                month=param['Mend'],
-                                day=param['Dend'])
 
 grid = mdm.gridgen(fh, dirs, param, plastic=True, add_seychelles=True)
 
 # Calculate the times for particle releases
 particles = {'time_array' : mdm.release_time(param, mode=param['mode'])}
+
+# Add the end time
+param['endtime'] = datetime(year=param['Yend'], month=param['Mend'], day=particles['time_array'].day+2)
+
+if param['endtime'].year > 2019:
+    param['endtime'] = datetime(year=2019, month=12, day=31, hour=12)
+    param['max_age'] = param['endtime'] - particles['time_array']
+    param['max_age'] = param['max_age'].total_seconds()
 
 # Calculate the locations, ids, procs for particle releases
 if not param['test']:
@@ -160,10 +155,10 @@ if not param['test']:
 else:
     if param['line_rel']:
         particles['loc_array'] = {}
-        particles['loc_array']['lon0'] = 80.033
-        particles['loc_array']['lon1'] = 80.033
-        particles['loc_array']['lat0'] = 5.8
-        particles['loc_array']['lat1'] = 6.57
+        particles['loc_array']['lon0'] = 56.25
+        particles['loc_array']['lon1'] = 56.25
+        particles['loc_array']['lat0'] = -4.7
+        particles['loc_array']['lat1'] = -3.7
 
         particles['loc_array']['ll'] = [np.linspace(particles['loc_array']['lon0'],
                                                     particles['loc_array']['lon1'],
@@ -175,11 +170,7 @@ else:
 
         particles['loc_array']['lon'] = particles['loc_array']['ll'][0].flatten()
         particles['loc_array']['lat'] = particles['loc_array']['ll'][1].flatten()
-
-        particles['loc_array']['iso'] = np.zeros_like(particles['loc_array']['lon'])
         particles['loc_array']['id'] = np.zeros_like(particles['loc_array']['lon'])
-        particles['loc_array']['cp0'] = np.zeros_like(particles['loc_array']['lon'])
-        particles['loc_array']['rp0'] = np.zeros_like(particles['loc_array']['lon'])
     else:
         particles['loc_array'] = mdm.release_loc(param, fh)
 
@@ -208,7 +199,7 @@ fieldset_ocean = FieldSet.from_netcdf(filenames, variables, dimensions,
 
 if param['windage']:
     # WINDAGE (FROM ERA5) + WAVE (STOKES FROM WAVERYS W/ GLORYS12V1)
-    if param['fw'] not in [0.5, 1.0, 2.0, 3.0]:
+    if param['fw'] not in [1.0, 2.0, 3.0, 4.0, 5.0]:
         raise NotImplementedError('Windage fraction not available!')
 
     wind_fh = 'WINDWAVE' + format(int(param['fw']*10), '04') + '*'
@@ -244,8 +235,6 @@ elif param['stokes']:
     fieldset_wave = FieldSet.from_netcdf(filenames, variables, dimensions,
                                          interp_method=interp_method)
 
-
-
 if param['windage']:
     fieldset = FieldSet(U=fieldset_ocean.U+fieldset_windwave.U,
                         V=fieldset_ocean.V+fieldset_windwave.V)
@@ -254,7 +243,6 @@ elif param['stokes']:
                         V=fieldset_ocean.V+fieldset_wave.V)
 else:
     fieldset = fieldset_ocean
-
 
 # ADD ADDITIONAL FIELDS
 # Country identifier grid (on psi grid, nearest)
@@ -317,7 +305,6 @@ fieldset.add_field(cnormy)
 fieldset.cnormx_rho.units = GeographicPolar()
 fieldset.cnormy_rho.units = Geographic()
 
-
 # ADD THE PERIODIC BOUNDARY
 fieldset.add_constant('halo_west', -180.)
 fieldset.add_constant('halo_east', 180.)
@@ -372,15 +359,22 @@ class debris(JITParticle):
     # PROVENANCE IDENTIFIERS #################################################
     ##########################################################################
 
-    # Source cell ID (specifically identifying source cell)
-    source_id = Variable('source_id',
-                         dtype=np.int32,
-                         to_write=True)
+    # CHECK VARIABLE NAME!!!!!!!!!!!!!!!!!!!!!!
 
-    # Source cell ID - specifically identifying source cell
-    source_cell = Variable('source_cell',
-                           dtype=np.int32,
-                           to_write=True)
+    # Country ISO code
+    origin_iso = Variable('source_id',
+                          dtype=np.int32,
+                          to_write=True)
+
+    # Original longitude
+    lon0 = Variable('lon0',
+                    dtype=np.float32,
+                    to_write=True)
+
+    # Original latitude
+    lat0 = Variable('lat0',
+                    dtype=np.float32,
+                    to_write=True)
 
     # Source cell ID (Initial mass of plastic from direct coastal input)
     cp0 = Variable('cp0',
@@ -470,6 +464,11 @@ class debris(JITParticle):
     e17 = Variable('e17', dtype=np.int64, initial=0, to_write=True)
     e18 = Variable('e18', dtype=np.int64, initial=0, to_write=True)
     e19 = Variable('e19', dtype=np.int64, initial=0, to_write=True)
+    e20 = Variable('e20', dtype=np.int64, initial=0, to_write=True)
+    e21 = Variable('e21', dtype=np.int64, initial=0, to_write=True)
+    e22 = Variable('e22', dtype=np.int64, initial=0, to_write=True)
+    e23 = Variable('e23', dtype=np.int64, initial=0, to_write=True)
+    e24 = Variable('e24', dtype=np.int64, initial=0, to_write=True)
 
 ##############################################################################
 # KERNELS ####################################################################
@@ -639,6 +638,31 @@ def event(particle, fieldset, time):
             particle.e19 += (particle.actual_sink_ct)*2**20
             particle.e19 += (particle.actual_sink_status)*2**40
             particle.e19 += (particle.actual_sink_id)*2**52
+        elif particle.e_num == 20:
+            particle.e20 += (particle.actual_sink_t0)
+            particle.e20 += (particle.actual_sink_ct)*2**20
+            particle.e20 += (particle.actual_sink_status)*2**40
+            particle.e20 += (particle.actual_sink_id)*2**52
+        elif particle.e_num == 21:
+            particle.e21 += (particle.actual_sink_t0)
+            particle.e21 += (particle.actual_sink_ct)*2**20
+            particle.e21 += (particle.actual_sink_status)*2**40
+            particle.e21 += (particle.actual_sink_id)*2**52
+        elif particle.e_num == 22:
+            particle.e22 += (particle.actual_sink_t0)
+            particle.e22 += (particle.actual_sink_ct)*2**20
+            particle.e22 += (particle.actual_sink_status)*2**40
+            particle.e22 += (particle.actual_sink_id)*2**52
+        elif particle.e_num == 23:
+            particle.e23 += (particle.actual_sink_t0)
+            particle.e23 += (particle.actual_sink_ct)*2**20
+            particle.e23 += (particle.actual_sink_status)*2**40
+            particle.e23 += (particle.actual_sink_id)*2**52
+        elif particle.e_num == 24:
+            particle.e24 += (particle.actual_sink_t0)
+            particle.e24 += (particle.actual_sink_ct)*2**20
+            particle.e24 += (particle.actual_sink_status)*2**40
+            particle.e24 += (particle.actual_sink_id)*2**52
 
             particle.delete() # Delete particle, since no more sinks can be saved
 
