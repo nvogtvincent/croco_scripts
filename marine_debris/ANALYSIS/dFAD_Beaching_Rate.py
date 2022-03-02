@@ -96,14 +96,20 @@ id_list_beached = np.unique(dfad_data_all['beach']['buoy_id'])
 id_list_beached = id_list_beached[np.isin(id_list_beached, id_list)]
 
 # Keep track of some basic statistics
-stats = {'rejected_no_coast': 0,  # Rejected due to no coastal intercept
-         'coast_no_beach': 0,     # Valid, no beaching event
-         'coast_beach': 0}        # Valid, beaching event
+stats = {'rejected_no_coast': 0, # Rejected due to no coastal intercept
+         'coast': 0,}            # Valid, no beaching event
 
-coast_time = []     # Cumulative time spent at coast by trajectory (s)
-beach_arr = []      # Whether trajectory beached or not (0: no beach, 1: beach but resuspended, 2: permanent beach)
+coast_time_arr = []              # Cumulative time spent at coast by trajectory for terminal beaching events only (s)
+# coast_time_Iall_arr = []       # Cumulative time spent at coast by trajectory for all beaching events via Imzilen criterion (s)
+
+imzilen_beach_arr = []           # Whether trajectory beached or not according to Imzilen 2021 criterion, termination only
+# imzilen_all_beach_arr = []     # Whether trajectory beached or not according to Imzilen 2021 criterion, all beaching events
+prox_beach_arr = []              # Proximity beaching criterion
+bath_beach_arr = []              # Depth beaching criterion
+kaandorp_beach_arr = []          # Quasi-depth criterion similar to Kaandorp 2020, i.e. check if points 30 arc-seconds to the N/E/S/W of last location has a positive elevation
 
 for i, dfad_id in enumerate(id_list):
+    print(dfad_id)
     dfad_data = {'info': dfad_data_all['info'].loc[dfad_data_all['info']['buoy_id'] == dfad_id],
                  'beach': dfad_data_all['beach'].loc[dfad_data_all['beach']['buoy_id'] == dfad_id],
                  'deploy': dfad_data_all['deploy'].loc[dfad_data_all['deploy']['buoy_id'] == dfad_id],
@@ -114,22 +120,144 @@ for i, dfad_id in enumerate(id_list):
     deployment_n = len(deployment_sections)
 
     for j, sec in enumerate(deployment_sections):
-        pos = dfad_data['traj'].loc[dfad_data['traj']['sctn_nm'] == sec]
+        pos = dfad_data['traj'].loc[dfad_data['traj']['sctn_nm'] == sec].copy()
+        pos_beach = dfad_data['beach'].loc[(dfad_data['beach']['frst_p_'] >= pos['pt_date'].iloc[0]) &
+                                           (dfad_data['beach']['lst_pt_'] <= pos['pt_date'].iloc[-1])]
 
-        # Evaluate if there are any potential coastal locations
+        # Evaluate coastal status of trajectory locations
         coast_intersection = coast83.interp(coords={'x': xr.DataArray(pos['geometry'].x.values, dims='z'),
                                                     'y': xr.DataArray(pos['geometry'].y.values, dims='z')},
                                             method='nearest').values[0]
 
         if np.sum(coast_intersection) > 0:
             # Estimate the time represented by each time frame
-            unique_times = np.unique(pos['traj']['pt_date'].values, return_counts=True)
+            # Firstly test if this is a regularly broadcasting dFAD (return [COUNTS PER DAY] [OCCURANCES])
+            freq_counts = np.unique(np.unique(pos['pt_date'], return_counts=True)[1], return_counts=True)
 
-            # Check when beaching events occur
-            if dfad_id in id_list_beached:
-                beaching_events = dfad_data['beach'].loc[(dfad_data['beach']['frst_p_'] >= unique_times[0][0]) &
-                                                         (dfad_data['beach']['lst_pt_'] <= unique_times[0][-1])]
-                print(0)
+            # If > 95% of occurances are a constant count per day, then assume this is a regularly broadcasting dFAD
+            # However, only do this if that frequency is the highest frequency available (otherwise you could)
+            # end up with >24 hours being represented by one day
+            if np.max(freq_counts[1])/np.sum(freq_counts[1]) > 0.95 and freq_counts[0][np.argmax(freq_counts[1])] == np.max(freq_counts[0]):
+                # Find the constant frequency
+                const_freq = freq_counts[0][np.argmax(freq_counts[1])]
+                const_freq = 24/const_freq
+
+                # Convert coast_intersection from bool to time (hrs)
+                coast_int_time = coast_intersection*const_freq
+            else:
+                # Otherwise, calculate the time per event as the hours per day divided by
+                # the number of events for that day.
+                coast_events = np.where(coast_intersection == 1)
+                coast_int_time = np.zeros_like(coast_intersection)
+
+                for k in coast_events:
+                    k_time = pos['pt_date'].values[k]
+                    k_occurances = pos['pt_date'].value_counts()[k_time]
+                    coast_int_time[k] = 24/k_occurances
+
+            pos['time_at_coast'] = coast_int_time
+
+            # Now that we have calculated the time spent on the coast, establish the various
+            # beaching criteria
+
+            # METHODOLOGY
+            # 1. Firstly, check whether there are any mid-trajectory beaching events. If
+            #    so, remove them from the array.
+            # 2. Secondly, check whether the end of the trajectory coincides with an Imzilen 21
+            #    beaching event. If so, calculate the cumulative amount of time spent before
+            #    the beaching event starts.
+            # 3. Thirdly, assess the remaining criteria and, if they are met, backtrack
+            #    until they are no longer met to find the start of that beaching event. Note that
+            #    this was not needed for GDP data because those were already fully QAd.
+
+            # Firstly, check whether a beaching event as defined by Imzilen 21 coincides with the
+            # end of the trajectory
+
+            if len(pos_beach):
+                imzilen_beach_status = False
+                traj_end = pos['pt_date'].iloc[-1]
+
+                for row in range(pos_beach):
+                    if pos_beach['frst_p_'].iloc[row] >= traj_end and pos_beach['lst_pt_'].iloc[row] >= traj_end:
+                        imzilen_beach_status = True
+                        pos2 = pos.loc[pos['pt_date'] <= pos_beach['frst_p_']]
+                        break
+
+                if imzilen_beach_status:
+                    imzilen_beach_arr.append(pos2['time_at_coast'])
+                else:
+
+
+
+
+                print()
+
+
+
+
+
+
+
+
+
+
+
+
+            # Firstly, check the (precomputed) criteria from Imzilen 2021
+            beach_events_in_section = len(pos_beach)
+
+            # for beach_event in range(beach_events_in_section):
+            #     if beach_event == 0:
+            #         # If first beach event, start of time-series is start of section
+            #         section_start = pos['pt_date'].values[0]
+            #     else:
+            #         # Otherwise, take the day after the last beaching ended
+            #         section_start = pos_beach['lst_pt_'].iloc[beach_event-1]
+            #         section_start += np.timedelta64(1, 'D')
+
+            #     section_end = pos_beach['frst_p_'].values[beach_event]
+
+            #     if section_end > section_start:
+            #         # This is required because there are some cases where a
+            #         # beaching event is identified immediately after the preceding
+            #         # beaching event
+
+            #         # Extract this section
+            #         pos2 = pos.loc[(pos['pt_date'] >= section_start) &
+            #                        (pos['pt_date'] <= section_end)]
+
+            #         # Add the number of hours the dFAD spent in the coastal environment
+            #         # before beaching
+            #         coast_time_Iall_arr.append(np.sum)
+
+
+
+
+
+
+        else:
+            # Firstly check that there are no recorded beaching events. If there are, this is suspicious (although not impossible).
+            if len(pos_beach) > 1:
+                print('WARNING!')
+                print('Records indicate a beaching event occured for buoy ID ' + str(dfad_id) + ' section ' + str(sec))
+                print('But no coastal intercept was found!')
+
+            # Dismiss
+            stats['rejected_no_coast'] += 1
+
+
+
+
+
+
+            #
+            # unique_times = np.unique(pos['pt_date'].values, return_counts=True)
+
+            # # Check when beaching events occur
+            # if dfad_id in id_list_beached:
+            #     beaching_events = dfad_data['beach'].loc[(dfad_data['beach']['frst_p_'] >= unique_times[0][0]) &
+            #                                              (dfad_data['beach']['lst_pt_'] <= unique_times[0][-1])]
+            #     print(0)
 
 
 
