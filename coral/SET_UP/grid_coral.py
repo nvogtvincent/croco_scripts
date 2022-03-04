@@ -24,6 +24,8 @@ from glob import glob
 from osgeo import gdal, osr
 from geographiclib.geodesic import Geodesic
 from sklearn.cluster import AgglomerativeClustering
+from sklearn.cluster import SpectralClustering
+from sklearn.preprocessing import StandardScaler
 from sklearn.neighbors import kneighbors_graph
 
 ###############################################################################
@@ -36,7 +38,9 @@ param = {'grid_res': 1.0,                          # Grid resolution in degrees
          'lat_range': [-40, 30],                   # Latitude range for output
 
          'dict_name': 'mmsi_dict.pkl',
-         'out_name': 'fisheries_waste_flux_'}
+         'out_name': 'fisheries_waste_flux_',
+
+         'av_cells_per_cluster': 40}
 
 # DIRECTORIES
 dirs = {'script': os.path.dirname(os.path.realpath(__file__)),
@@ -285,30 +289,93 @@ for yidx, xidx in tqdm(zip(coral_idx_c[0], coral_idx_c[1]), total=len(coral_idx_
 # Clustering ##################################################################
 ###############################################################################
 
-# See https://scikit-learn.org/stable/auto_examples/cluster/plot_agglomerative_clustering.html
-# or https://scikit-learn.org/stable/auto_examples/cluster/plot_dbscan.html#sphx-glr-auto-examples-cluster-plot-dbscan-py
-# WIP!!
-n_clusters=30
-lon_w, lat_w = np.meshgrid(lon_rho_w, lat_rho_w)
-lon_w = lon_w[eez_grid_w == 690]
-lat_w = lat_w[eez_grid_w == 690]
-X = np.concatenate((lon_w, lat_w)).reshape((2,-1)).T
-knn_graph = kneighbors_graph(X, n_clusters, include_self=False)
-linkage='ward'
-model = AgglomerativeClustering(linkage=linkage, connectivity=knn_graph, n_clusters=n_clusters)
-model.fit(X)
-data_crs = ccrs.PlateCarree()
+# See https://scikit-learn.org/stable/modules/generated/sklearn.cluster.SpectralClustering.html#sklearn.cluster.SpectralClustering
+# For each country, carry out spectral clustering (with manual intervention for Seychelles)
+
+# Parameters
+av_cells_per_cluster = param['av_cells_per_cluster']
+
+# Create a dict to store the cell id for each EEZ
+cell_id_dict = {}
+
+# Get a list of all ISO codes
+iso_list = np.unique(eez_grid_w[eez_grid_w != 0])
+iso_list[[0, np.where(iso_list == 690)[0][0]]] = iso_list[[np.where(iso_list == 690)[0][0], 0]]
+
+# Define certain model-specific parameters for different regions
+dist_thresh_dict = {86 : 1.5,
+                    174: 1.5,
+                    250: 1.5,
+                    404: 1.0,
+                    450: 2.5,
+                    462: 1.0,
+                    480: 2.0,
+                    508: 2.0,
+                    690: 0.2,
+                    706: 1.5,
+                    834: 0.7
+                    }
+
+for i, iso_code in enumerate(iso_list):
+    # 1. Carry out agglomerative clustering (X, model)
+    lon_w, lat_w = np.meshgrid(lon_rho_w, lat_rho_w)
+    lon_w = lon_w[eez_grid_w == iso_code]
+    lat_w = lat_w[eez_grid_w == iso_code]
+    n_clusters = int(len(lon_w)/av_cells_per_cluster)
+
+    X = np.concatenate((lon_w, lat_w)).reshape((2,-1)).T
+
+    # Use agglomerative clustering with a distance threshold
+    knn_graph = kneighbors_graph(X, n_clusters, include_self=False)
+    linkage='ward'
+    model = AgglomerativeClustering(linkage=linkage, connectivity=knn_graph,
+                                    n_clusters=None,
+                                    distance_threshold=dist_thresh_dict[iso_code]).fit(X)
+
+    X = np.concatenate([X, model.labels_.reshape(-1, 1)], axis=1)
+
+    plt.scatter(X[:,0], X[:,1], c=X[:,2], s=1, cmap='tab20')
+    print(np.unique(X[:,2], return_counts=True)[1])
+
+    # 5. For Seychelles only: manually label sites of interest
+    if iso_code == 690:
+        assert i == 0
+
+        # Aldabra North Coast
+        site_loc = np.where()
+
+
+
+    # 6. Save to X_all
+    if i == 0:
+        cell_id_dict[str(iso_code)] = np.unique(X2[:,-1]).compressed()
+        X_all = np.copy(X2)
+    else:
+        cell_id_dict[str(iso_code)] = np.unique(X2[:,-1]+np.max(X_all[:, -1])+1).compressed()
+        X_all = np.concatenate([X_all, X2+np.max(X_all[:, -1])+1], axis=0)
+
+
+
+
+
+np.unique(model.labels_)
+plt.scatter(X2[:,0], X2[:,1], c=X2[:,2], s=1, cmap='hsv')
 
 f, ax = plt.subplots(1, 1, figsize=(10, 10), constrained_layout=True,
                      subplot_kw={'projection': ccrs.PlateCarree()})
-ax.scatter(X[:,0], X[:,1], c=model.labels_, s=1, transform=data_crs)
+ax.scatter(X[:,0], X[:,1], c=model.labels_, s=1, transform=data_crs, cmap='tab20c')
 # ax.set_ylim([-17, -9])
 
+
+# knn_graph = kneighbors_graph(X, n_clusters, include_self=False)
+# linkage='ward'
+# model = AgglomerativeClustering(linkage=linkage, connectivity=knn_graph, n_clusters=n_clusters).fit(X)
+# data_crs = ccrs.PlateCarree()
 
 ###############################################################################
 # Plot reef sites #############################################################
 ###############################################################################
-
+20
 # Plot 'before'
 f, ax = plt.subplots(1, 1, figsize=(24, 10), constrained_layout=True,
                      subplot_kw={'projection': ccrs.PlateCarree()})
