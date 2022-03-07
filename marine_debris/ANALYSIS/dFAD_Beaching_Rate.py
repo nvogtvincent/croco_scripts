@@ -18,8 +18,6 @@ import cmasher as cmr
 import geopandas as gpd
 import pandas as pd
 import xarray as xr
-import pyreadr
-import rpy2.robjects as robjects
 from scipy.linalg import lstsq
 from glob import glob
 from tqdm import tqdm
@@ -47,10 +45,10 @@ dirs = {'script': os.path.dirname(os.path.realpath(__file__)),
         'fig': os.path.dirname(os.path.realpath(__file__)) + '/../FIGURES/'}
 
 # FILE HANDLES
-fh = {'dfad': [dirs['dfad'] + 'dfad_trajs.pkl',
-               dirs['dfad'] + 'dfad_beachings.pkl',
-               dirs['dfad'] + 'dfad_deployments.pkl',
-               dirs['dfad'] + 'dfad_pts.pkl'],
+fh = {'dfad': [dirs['dfad'] + 'dfad_trajs.gpkg',
+               dirs['dfad'] + 'dfad_beachings.gpkg',
+               dirs['dfad'] + 'dfad_deployments.gpkg',
+               dirs['dfad'] + 'dfad_pts.gpkg'],
       'gebco': dirs['grid'] + 'LOC/gebco_2021/GEBCO_2021.nc',
       'coast_005deg': dirs['grid'] + 'LOC/coastal_mask/coastal_mask_005.gpkg',
       'coast_083deg': dirs['grid'] + 'LOC/coastal_mask/GSHHS_h_L1_buffer083_res005.tif',
@@ -62,10 +60,10 @@ fh = {'dfad': [dirs['dfad'] + 'dfad_trajs.pkl',
 ###############################################################################
 
 # Load dFAD data ##############################################################
-dfad_data_all = {'info': pd.read_pickle(fh['dfad'][0]),
-                 'beach': pd.read_pickle(fh['dfad'][1]),
-                 'deploy': pd.read_pickle(fh['dfad'][2]),
-                 'traj': pd.read_pickle(fh['dfad'][3])}
+dfad_data_all = {'info': gpd.read_file(fh['dfad'][0]),
+                 'beach': gpd.read_file(fh['dfad'][1]),
+                 'deploy': gpd.read_file(fh['dfad'][2]),
+                 'traj': gpd.read_file(fh['dfad'][3])}
 
 dfad_data_all['info']['strt_dt'] = pd.to_datetime(dfad_data_all['info']['strt_dt'], format='%Y-%m-%d')
 dfad_data_all['info']['end_dat'] = pd.to_datetime(dfad_data_all['info']['end_dat'], format='%Y-%m-%d')
