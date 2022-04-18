@@ -8,17 +8,9 @@ Visualise marine debris results
 import os
 import numpy as np
 import matplotlib.pyplot as plt
-import matplotlib.colors as colors
-import matplotlib.ticker as mticker
 import cmasher as cmr
 import xarray as xr
-from datetime import timedelta, datetime
-from glob import glob
-import time
 from skimage.measure import block_reduce
-from matplotlib.gridspec import GridSpec
-import cartopy.crs as ccrs
-import cartopy.feature as cfeature
 import pickle
 
 # PARAMETERS
@@ -35,7 +27,7 @@ param = {# Analysis parameters
 
          # CMAP
          'cmap': cmr.guppy_r,
-         'write_cmap': False, # Whether to write cmap data
+         'write_cmap': False, # Whether to write cmap data (good w/ 100/0010)
          'n_source': 10,
 
          # Export
@@ -52,9 +44,12 @@ fh = {'flux': dirs['script'] + '/terrestrial_flux_' + param['mode'] + '_s' + str
       'source_list': dirs['plastic'] + 'country_list.in',
       'sink_list': dirs['plastic'] + 'sink_list.in',
       'cmap': dirs['fig'] + 'cmap_data.pkl',
-      'fig': dirs['fig'] + 'terrestrial_sources_' + param['mode'] + '_s' + str(param['us_d']) + '_b' + str(param['ub_d']) + '.pdf'}
+      'fig1': dirs['fig'] + 'terrestrial_sources_' + param['mode'] + '_s' + str(param['us_d']) + '_b' + str(param['ub_d']) + '.pdf',
+      'fig2': dirs['fig'] + 'terrestrial_drift_time_' + param['mode'] + '_s' + str(param['us_d']) + '_b' + str(param['ub_d']) + '.pdf'}
 
 n_years = param['y1']-param['y0']+1
+
+
 ##############################################################################
 # LOAD DATA                                                                  #
 ##############################################################################
@@ -102,6 +97,14 @@ if param['write_cmap']:
 
     with open(fh['cmap'], 'wb') as pkl:
         pickle.dump(cmap_list, pkl, protocol=pickle.HIGHEST_PROTOCOL)
+
+    # Now repeat for dtmatrix
+    other_dt = dtmatrix[dtmatrix['source'].isin(l2_source.coords['source'])].sum(dim='source')
+    dtmatrix = dtmatrix[dtmatrix['source'].isin(l1_source.coords['source'])]
+    dtmatrix[dtmatrix['source'] == 'Other'] = other_dt
+    dtmatrix = dtmatrix.sortby(fmatrix_pop, ascending=False)
+    dtmatrix = dtmatrix/dtmatrix.sum(dim=('source', 'drift_time'))
+
 else:
     with open(fh['cmap'], 'rb') as pkl:
         cmap_list = pickle.load(pkl)
@@ -126,6 +129,13 @@ else:
         fmatrix_order[fmatrix_order['source'] == source_name] = i
 
     fmatrix = fmatrix.sortby(fmatrix_order)
+
+    # Repeat for dtmatrix
+    other_dt = dtmatrix[~dtmatrix['source'].isin(l1_source)].sum(dim='source')
+    dtmatrix = dtmatrix[dtmatrix['source'].isin(l1_source)]
+    dtmatrix[dtmatrix['source'] == 'Other'] = other_dt
+    dtmatrix = dtmatrix.sortby(fmatrix_order, ascending=True)
+    dtmatrix = dtmatrix/dtmatrix.sum(dim=('source', 'drift_time'))
 
 ##############################################################################
 # PLOT                                                                       #
@@ -177,10 +187,12 @@ for i in range(n_sink):
 
         cumsum += fmatrix[j, i]
 
+grp_mp = np.concatenate((grp_mp[:-1], xpos[-9:]))
+
 ax.set_xticks(grp_mp)
 ax.set_xticklabels(['Aldabra Group', 'Farquhar Group', 'Alphonse Group',
                     'Amirante Islands', 'Southern Coral Group', 'Seychelles Plateau',
-                    'Other'], fontsize=24)
+                    'CMR', 'MYT', 'LKS', 'MDV', 'MRT', 'REU', 'PMB', 'SCT', 'CHA'], fontsize=24)
 ax.tick_params(axis='y', labelsize=28)
 
 ax.set_ylim([0, 1])
@@ -189,12 +201,44 @@ ax.spines['left'].set_visible(False)
 ax.spines['right'].set_visible(False)
 ax.spines['top'].set_visible(False)
 ax.spines['bottom'].set_visible(False)
-ax.set_ylabel('Proportion of beaching terrestrial debris from source', fontsize=36)
+ax.set_ylabel('Proportion of terrestrial debris from source', fontsize=36)
 # ax.set_title(param['title'], y=1.02)
 
 ax.legend(loc="lower center", bbox_to_anchor=(0.5, -0.07), ncol=param['n_source'],
           frameon=False, fontsize=28)
 
-plt.savefig(fh['fig'], dpi=300)
+plt.savefig(fh['fig1'], dpi=300)
+plt.close()
 
+# Now plot a mass-time histogram for Aldabra only
+reduction_ratio = 2
+dpy = 365
+new_time_axis = block_reduce(dtmatrix.coords['drift_time'], (reduction_ratio,), func=np.mean)/365
+width = new_time_axis[1] - new_time_axis[0]
+site_chosen = 'Aldabra'
+f, ax = plt.subplots(1, 1, figsize=(40, 15), constrained_layout=True)
+cumsum = np.zeros_like(block_reduce(dtmatrix.loc[dtmatrix.coords['source'].values[j], site_chosen, :], block_size=(reduction_ratio,), func=np.sum))
 
+# Hack to get legend in the correct order
+for j in range(param['n_source']):
+    ax.bar(0, 0, 0, color=cmap_list[fmatrix.coords['source'].values[j]],
+           label=fmatrix.coords['source'].values[j])
+
+for j in range(param['n_source']):
+    ax.bar(new_time_axis,
+           block_reduce(dtmatrix.loc[dtmatrix.coords['source'].values[j], site_chosen, :], (reduction_ratio,), func=np.sum),
+           width, bottom=cumsum, color=cmap_list[dtmatrix.coords['source'].values[j]])
+    cumsum += block_reduce(dtmatrix.loc[dtmatrix.coords['source'].values[j], site_chosen, :], (reduction_ratio,), func=np.sum)
+
+ax.set_xlim([0, 5])
+ax.spines['left'].set_visible(False)
+ax.spines['right'].set_visible(False)
+ax.spines['top'].set_visible(False)
+ax.spines['bottom'].set_visible(False)
+ax.set_ylabel('Proportion of terrestrial debris from source', fontsize=36)
+ax.set_xlabel('Drifting time (years)', fontsize=36)
+ax.tick_params(axis='x', labelsize=28)
+ax.set_yticklabels([])
+ax.legend(loc="lower center", bbox_to_anchor=(0.5, -0.18), ncol=param['n_source'],
+          frameon=False, fontsize=28)
+plt.savefig(fh['fig2'], dpi=300)
