@@ -338,11 +338,7 @@ def release_loc_land(param, fh):
     # Generates initial coordinates for particle releases at a single time
     # frame based on the ISO codes for countries of interest.
 
-    ids = param['iso_list']
-    # pn  = param['pn']
-
-    # Convert pn to the number along a square
-    # pn = int(np.ceil(pn**0.5))
+    ids = param['source_iso_list']
 
     # Firstly load the requisite fields:
     # - rho & psi coordinates
@@ -356,7 +352,6 @@ def release_loc_land(param, fh):
 
         lon_rho = np.array(nc.variables['lon_rho'][:])
 
-        id_psi    = np.array(nc.variables['source_id_psi'][:])
         iso_psi   = np.array(nc.variables['iso_psi'][:])
         lsm_psi   = np.array(nc.variables['lsm_psi'][:])
         cp_psi    = np.array(nc.variables['cplastic_psi'][:])
@@ -396,8 +391,8 @@ def release_loc_land(param, fh):
     tot_cp = np.sum(cp_psi)
     tot_rp = np.sum(rp_psi)
 
-    cp_psi[cp_psi + rp_psi < param['threshold']] = 0
-    rp_psi[cp_psi + rp_psi < param['threshold']] = 0
+    cp_psi[(cp_psi/10) + rp_psi < param['threshold']] = 0
+    rp_psi[(cp_psi/10) + rp_psi < param['threshold']] = 0
 
     print('Cells remaining after threshold: ' + str(np.count_nonzero(cp_psi + rp_psi)))
     print('Riverine plastic remaining after threshold: ' + str(100*np.sum(rp_psi)/tot_rp) + '%')
@@ -492,19 +487,24 @@ def release_loc_land(param, fh):
             plt.close()
 
     # Extract cell grid indices
-    p_psi = cp_psi + rp_psi
-    idx = list(np.where(p_psi > 0))
+    p_psi = (cp_psi/10) + rp_psi # Assume 10% of coastal plastic enters for this calculation
+    idx = list(np.where(p_psi > 0)) # Contains grid indices of all grid cells with plastic above the threshold
 
     # Calculate the total number of particles
     nl  = idx[0].shape[0]  # Number of locations
-    p_psi_list = cp_psi[tuple(idx)] + rp_psi[tuple(idx)]
-    pn_list = np.array(np.ceil(param['log_mult']*np.log10(p_psi_list)), dtype=np.int)
+    p_psi_list = cp_psi[tuple(idx)]/10 + rp_psi[tuple(idx)]
+
+    # Calculate number of particles per cell using the following formula:
+    # pn = (m*(log10[total_plastic]-log10[plastic_threshold]+(1/3)))**2,
+    # i.e. all cells have at least (m/3)**2 particles
+    const = np.log10(param['threshold'])-(1/3)
+    pn_list = np.array(np.ceil(param['log_mult']*(np.log10(p_psi_list)-const)), dtype=np.int)
     pn_list_cs = np.cumsum(pn_list**2)
     pn_list_cs = np.concatenate((np.array([0]), pn_list_cs))
     pn_tot = pn_list_cs[-1]
 
     print('')
-    print('Total number of particles generated per relase: ' + str(pn_tot))
+    print('Total number of particles generated per release: ' + str(pn_tot))
 
     # For cell psi[i, j], the surrounding rho cells are:
     # rho[i, j]     (SW)
@@ -524,7 +524,6 @@ def release_loc_land(param, fh):
     lat_out = np.zeros((pn_tot,), dtype=np.float64)
     cp0_out = np.zeros((pn_tot,), dtype=np.float32)
     rp0_out = np.zeros((pn_tot,), dtype=np.float32)
-    id_out = np.zeros((pn_tot,), dtype=np.int32)
     iso_out = np.zeros((pn_tot,), dtype=np.int16)
 
     for loc in range(nl):
@@ -536,7 +535,7 @@ def release_loc_land(param, fh):
         cp_cell = cp_psi[loc_yidx, loc_xidx]
         rp_cell = rp_psi[loc_yidx, loc_xidx]
 
-        pn_cell = int(np.ceil(param['log_mult']*np.log10(cp_cell + rp_cell)))
+        pn_cell = int(np.ceil(param['log_mult']*(np.log10(cp_cell/10 + rp_cell)-const)))
 
         cp_part = cp_cell/pn_cell**2
         rp_part = rp_cell/pn_cell**2
@@ -549,7 +548,6 @@ def release_loc_land(param, fh):
         loc_y = lat_psi[loc_yidx]
         loc_x = lon_psi[loc_xidx]
 
-        loc_id = id_psi[loc_yidx, loc_xidx]
         loc_iso = iso_psi[loc_yidx, loc_xidx]
 
         s_idx = pn_list_cs[loc]
@@ -560,12 +558,10 @@ def release_loc_land(param, fh):
         cp0_out[s_idx:e_idx] = np.ones(np.shape(gridx), dtype=np.float32)*cp_part
         rp0_out[s_idx:e_idx] = np.ones(np.shape(gridx), dtype=np.float32)*rp_part
         iso_out[s_idx:e_idx] = np.ones(np.shape(gridx), dtype=np.int16)*loc_iso
-        id_out[s_idx:e_idx] = np.ones(np.shape(gridx), dtype=np.int32)*loc_id
 
     pos0 = {'lon': lon_out,
             'lat': lat_out,
             'iso': iso_out,
-            'id': id_out,
             'cp0': cp0_out,
             'rp0': rp0_out}
 
@@ -676,7 +672,6 @@ def add_times(particles, param):
 
         data['lon'] = data['lon'][i0:i1]
         data['lat'] = data['lat'][i0:i1]
-        data['id'] = data['id'][i0:i1]
         data['time'] = data['time'][i0:i1]
 
         try:
@@ -956,7 +951,7 @@ def gridgen(fh, dirs, param, **kwargs):
             ##############################################################################
 
             sink_id_psi = np.zeros_like(iso_psi)
-            sink_loc = np.where(np.isin(iso_psi, param['id']))
+            sink_loc = np.where(np.isin(iso_psi, 690))
             sink_id_psi[sink_loc] = 1
 
             # (1) Aldabra
@@ -1031,6 +1026,41 @@ def gridgen(fh, dirs, param, **kwargs):
             sink_id_psi[(lat_psi_grd > -4.0)*(lat_psi_grd < -3.5)*
                         (lon_psi_grd > 55.0)*(lon_psi_grd < 55.5)] *= 18
 
+            # Now label other countries of interest
+            for country in param['sink_iso_list']:
+                sink_loc = np.where(np.isin(iso_psi, country))
+
+                # Modifications to only include Socotra (Yemen), Lakshadweep (India), and Pemba (Tanzania)
+                if np.isin(country, [356, 887, 834]):
+                    if country == 356:
+                        idx_lon_max = np.searchsorted(lon_psi, 74.5)
+                        idx_lat_max = np.searchsorted(lat_psi, 13)
+                        sink_loc_mod_i = sink_loc[0][(sink_loc[0] < idx_lat_max)*
+                                                     (sink_loc[1] < idx_lon_max)]
+                        sink_loc_mod_j = sink_loc[1][(sink_loc[0] < idx_lat_max)*
+                                                     (sink_loc[1] < idx_lon_max)]
+                    elif country == 887:
+                        idx_lon_min = np.searchsorted(lon_psi, 53.1)
+                        idx_lon_max = np.searchsorted(lon_psi, 54.7)
+                        idx_lat_min = np.searchsorted(lat_psi, 12.1)
+                        idx_lat_max = np.searchsorted(lat_psi, 12.9)
+                        sink_loc_mod_i = sink_loc[0][(sink_loc[0] < idx_lat_max)*(sink_loc[0] > idx_lat_min)*
+                                                     (sink_loc[1] < idx_lon_max)*(sink_loc[1] > idx_lon_min)]
+                        sink_loc_mod_j = sink_loc[1][(sink_loc[0] < idx_lat_max)*(sink_loc[0] > idx_lat_min)*
+                                                     (sink_loc[1] < idx_lon_max)*(sink_loc[1] > idx_lon_min)]
+                    elif country == 834:
+                        idx_lon_min = np.searchsorted(lon_psi, 39.5)
+                        idx_lon_max = np.searchsorted(lon_psi, 40.0)
+                        idx_lat_min = np.searchsorted(lat_psi, -5.6)
+                        idx_lat_max = np.searchsorted(lat_psi, -4.7)
+                        sink_loc_mod_i = sink_loc[0][(sink_loc[0] < idx_lat_max)*(sink_loc[0] > idx_lat_min)*
+                                                     (sink_loc[1] < idx_lon_max)*(sink_loc[1] > idx_lon_min)]
+                        sink_loc_mod_j = sink_loc[1][(sink_loc[0] < idx_lat_max)*(sink_loc[0] > idx_lat_min)*
+                                                     (sink_loc[1] < idx_lon_max)*(sink_loc[1] > idx_lon_min)]
+
+                    sink_id_psi[(sink_loc_mod_i, sink_loc_mod_j)] = country
+                else:
+                    sink_id_psi[sink_loc] = country
 
             ##############################################################################
             # Calculate total plastic budget #############################################
