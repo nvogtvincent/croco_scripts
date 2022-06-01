@@ -13,7 +13,10 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import cmasher as cmr
 import cartopy.crs as ccrs
+import cartopy.feature as cfeature
 import matplotlib.ticker as mticker
+from matplotlib.cm import ScalarMappable
+from matplotlib.gridspec import GridSpec
 from matplotlib import colors
 from netCDF4 import Dataset
 from calendar import monthrange
@@ -399,92 +402,249 @@ def release_loc_land(param, fh):
     print('Direct coastal plastic remaining after threshold: ' + str(100*np.sum(cp_psi)/tot_cp) + '%')
 
     if param['plot_input']:
-         # Prepare the fields for plotting. We need:
-        # (1) Mask for coasts
-        # (2) Cells within certain distance of coast
-        # (3) Fill with nearest plastic value
+        with Dataset(fh['ref'], mode='r') as nc:
+            subset_ref = 24
+            ref_lon = nc.variables['longitude'][:]
+            ref_lat = nc.variables['latitude'][:]
+            ref_uo = nc.variables['uo'][:, 0, :, :]
+            ref_vo = nc.variables['vo'][:, 0, :, :]
 
-        # Masks
-        cp_mask, rp_mask = np.zeros_like(cp_psi), np.zeros_like(rp_psi)
-        cp_mask[cp_psi == 0] = 1
-        rp_mask[rp_psi == 0] = 1
+        f = plt.figure(constrained_layout=True, figsize=(45, 28))
+        gs = GridSpec(2, 4, figure=f, width_ratios=[1, 0.025, 1, 0.025])
+        ax = []
+        ax.append(f.add_subplot(gs[0, 0], projection = ccrs.PlateCarree())) # Currents (W)
+        ax.append(f.add_subplot(gs[1, 0], projection = ccrs.PlateCarree())) # Currents (S)
+        ax.append(f.add_subplot(gs[:, 1])) # Colorbar for currents
+        ax.append(f.add_subplot(gs[0, 2], projection = ccrs.PlateCarree())) # River input
+        ax.append(f.add_subplot(gs[1, 2], projection = ccrs.PlateCarree())) # Coastal input
+        ax.append(f.add_subplot(gs[:, 3])) # Colorbar for plastics
 
-        # Cells within distance
-        vis_dist = 10
-        cp_mask2 = distance_transform_edt(cp_mask)
-        cp_mask2[cp_mask2 > vis_dist] = 0
-        cp_mask2[cp_mask2 > 0] = 1
-        cp_mask2[cp_psi > 0] = 1
+        gl = []
+        scatter = []
+        cplot = []
 
-        rp_mask2 = distance_transform_edt(rp_mask)
-        rp_mask2[rp_mask2 > vis_dist] = 0
-        rp_mask2[rp_mask2 > 0] = 1
-        rp_mask2[rp_psi > 0] = 1
+        land_10m = cfeature.NaturalEarthFeature('physical', 'land', '10m',
+                                                edgecolor='white',
+                                                facecolor='black',
+                                                linewidth=0.5,
+                                                zorder=1)
 
-        # Now fill with nearest value
-        cp_psi = np.ma.masked_where(cp_psi == 0, cp_psi)
-        lon_psi_grid_c = np.ma.masked_where(np.ma.getmask(cp_psi), lon_psi_grid)
-        lat_psi_grid_c = np.ma.masked_where(np.ma.getmask(cp_psi), lat_psi_grid)
-        cp_psi_list = cp_psi.compressed()
-        cp_lon_list = lon_psi_grid_c.compressed()
-        cp_lat_list = lat_psi_grid_c.compressed()
+        for i in [0, 1, 3, 4]:
+            ax[i].set_aspect(1)
+            ax[i].set_facecolor('k')
+            ax[i].set_xlim([20, 140])
+            ax[i].set_ylim([-40, 40])
 
-        cp_points = np.concatenate((cp_lon_list, cp_lat_list)).reshape((2, -1)).T
-        cp_viz = griddata(cp_points, cp_psi_list, (lon_psi_grid, lat_psi_grid), method='nearest')
-        cp_viz *= cp_mask2
+        # Plot currents
+        winter_uo = 0.5*(ref_uo[0, :, ]+ref_uo[1, :, ])
+        summer_uo = 0.5*(ref_uo[6, :, ]+ref_uo[7, :, ])
+        winter_vo = 0.5*(ref_vo[0, :, ]+ref_vo[1, :, ])
+        summer_vo = 0.5*(ref_vo[6, :, ]+ref_vo[7, :, ])
 
-        rp_psi = np.ma.masked_where(rp_psi == 0, rp_psi)
-        lon_psi_grid_r = np.ma.masked_where(np.ma.getmask(rp_psi), lon_psi_grid)
-        lat_psi_grid_r = np.ma.masked_where(np.ma.getmask(rp_psi), lat_psi_grid)
-        rp_psi_list = rp_psi.compressed()
-        rp_lon_list = lon_psi_grid_r.compressed()
-        rp_lat_list = lat_psi_grid_r.compressed()
+        winter_v = np.sqrt(winter_uo**2 + winter_vo**2)
+        summer_v = np.sqrt(summer_uo**2 + summer_vo**2)
 
-        rp_points = np.concatenate((rp_lon_list, rp_lat_list)).reshape((2, -1)).T
-        rp_viz = griddata(rp_points, rp_psi_list, (lon_psi_grid, lat_psi_grid), method='nearest')
-        rp_viz *= rp_mask2
+        cplot.append(ax[0].pcolormesh(ref_lon, ref_lat, winter_v, cmap=cmr.cosmic,
+                                      vmin=0, vmax=1.2, transform=ccrs.PlateCarree(),
+                                      rasterized=True))
+        ax[0].quiver(ref_lon[::subset_ref], ref_lat[::subset_ref],
+                      winter_uo[::subset_ref, ::subset_ref],
+                      winter_vo[::subset_ref, ::subset_ref], color='w',
+                      scale=2e1, scale_units='height', width=1e-3, headwidth=3)
 
-        plastic_name = [' direct coastal ', ' riverine ']
-        plastic_fh = ['_coasts.png', '_rivers.png']
-        plastic_data = [cp_viz, rp_viz]
+        ax[0].add_feature(land_10m)
+        gl.append(ax[0].gridlines(crs=ccrs.PlateCarree(), draw_labels=True,
+                                  linewidth=1, color='white', linestyle='-', zorder=11))
+        gl[0].xlocator = mticker.FixedLocator(np.arange(-200, 200, 20))
+        gl[0].ylocator = mticker.FixedLocator(np.arange(-80, 120, 20))
+        gl[0].xlabels_top = False
+        gl[0].ylabels_right = False
+        gl[0].ylabel_style = {'size': 28}
+        gl[0].xlabel_style = {'size': 28}
 
-        for i in range(2):
-            # Plot coastal plastics
-            f, ax = plt.subplots(1, 1, figsize=(20, 10),
-                                 subplot_kw={'projection': ccrs.PlateCarree()})
-            f.subplots_adjust(hspace=0, wspace=0, top=0.925, left=0.1)
-            ax.set_xlim([-90, 180])
-            ax.set_ylim([-65, 65])
+        ax[0].text(137, -37, 'Winter monsoon (J/F)', fontsize=36, color='w', zorder=20,
+                   ha='right')
 
-            # Plot the locations
-            cmap = cmr.gem_r
-            cp_pcolor = ax.pcolormesh(lon_psi, lat_psi, plastic_data[i], cmap=cmap,
-                                      norm=colors.LogNorm(vmin=param['threshold'], vmax=1e6),
-                                      transform=ccrs.PlateCarree(), zorder=2)
+        cplot.append(ax[1].pcolormesh(ref_lon, ref_lat, summer_v, cmap=cmr.cosmic,
+                                      vmin=0, vmax=1.2, transform=ccrs.PlateCarree(),
+                                      rasterized=True))
 
-            # Add land
-            ax.pcolormesh(lon_psi, lat_psi,
-                          np.ma.masked_where(lsm_psi == 0, lsm_psi),
-                          cmap=cmr.neutral_r, vmin=0, vmax=2,
-                          transform=ccrs.PlateCarree(), zorder=3)
-            ax.axis('off')
+        ax[1].quiver(ref_lon[::subset_ref], ref_lat[::subset_ref],
+                     summer_uo[::subset_ref, ::subset_ref],
+                     summer_vo[::subset_ref, ::subset_ref], color='w',
+                     scale=2e1, scale_units='height', width=1e-3, headwidth=3)
 
-            # Add cartographic features
-            gl = ax.gridlines(crs=ccrs.PlateCarree(), draw_labels=True,
-                              linewidth=0.8, color='black', linestyle='--', zorder=11)
-            gl.xlocator = mticker.FixedLocator(np.arange(-90, 210, 30))
-            gl.ylocator = mticker.FixedLocator(np.arange(-90, 120, 30))
-            gl.xlabels_top = False
-            gl.ylabels_right = False
+        ax[1].add_feature(land_10m)
+        gl.append(ax[1].gridlines(crs=ccrs.PlateCarree(), draw_labels=True,
+                                  linewidth=1, color='white', linestyle='-', zorder=11))
+        gl[1].xlocator = mticker.FixedLocator(np.arange(-200, 200, 20))
+        gl[1].ylocator = mticker.FixedLocator(np.arange(-80, 120, 20))
+        gl[1].xlabels_top = False
+        gl[1].ylabels_right = False
+        gl[1].ylabel_style = {'size': 28}
+        gl[1].xlabel_style = {'size': 28}
 
-            cax = f.add_axes([ax.get_position().x1+0.01,ax.get_position().y0-0.015,0.015,ax.get_position().height+0.03])
+        ax[1].text(137, -37, 'Summer monsoon (J/A)', fontsize=36, color='w', zorder=20,
+                   ha='right')
 
-            cb = plt.colorbar(cp_pcolor, cax=cax, pad=0.1)
-            cb.set_label('Estimated' + plastic_name[i] + 'plastic flux to ocean (kg/yr)', size=12)
-            ax.set_aspect('auto', adjustable=None)
-            ax.margins(x=-0.01, y=-0.01)
-            plt.savefig(fh['fig'] + plastic_fh[i], dpi=300)
-            plt.close()
+        # Colorbar
+        cb0 = plt.colorbar(cplot[1], cax=ax[2])
+        cb0.set_label('Mean surface current velocity (m/s)', size=28)
+        ax[2].tick_params(axis='y', labelsize=24)
+
+        # Mask plastic input
+        cp_lon_list = np.ma.masked_where(cp_psi<=1e6, lon_psi_grid).compressed()
+        cp_lat_list = np.ma.masked_where(cp_psi<=1e6, lat_psi_grid).compressed()
+        cp_list = np.ma.masked_where(cp_psi<=1e6, cp_psi).compressed()/1e4 # Extra factor 10 because we only use 0.1 in most cases
+        rp_lon_list = np.ma.masked_where(rp_psi<=1e5, lon_psi_grid).compressed()
+        rp_lat_list = np.ma.masked_where(rp_psi<=1e5, lat_psi_grid).compressed()
+        rp_list = np.ma.masked_where(rp_psi<=1e5, rp_psi).compressed()/1e3
+
+        norm = colors.LogNorm(vmin=1e2, vmax=1e4)
+        cmcp = cmr.torch(norm(cp_list))
+        cmrp = cmr.torch(norm(rp_list))
+
+        # Coastal
+        scatter.append(ax[3].scatter(cp_lon_list, cp_lat_list, s=75*(np.log(cp_list)-4.5)**2,
+                                     marker='o', linewidths=1, facecolors='none',
+                                     edgecolors=cmcp, zorder=5))
+
+        ax[3].add_feature(land_10m)
+        gl.append(ax[3].gridlines(crs=ccrs.PlateCarree(), draw_labels=True,
+                                  linewidth=1, color='white', linestyle='-', zorder=11))
+        gl[2].xlocator = mticker.FixedLocator(np.arange(-200, 200, 20))
+        gl[2].ylocator = mticker.FixedLocator(np.arange(-80, 120, 20))
+        gl[2].xlabels_top = False
+        gl[2].ylabels_right = False
+        gl[2].ylabel_style = {'size': 28}
+        gl[2].xlabel_style = {'size': 28}
+
+        ax[3].text(137, -37, 'Direct coastal input', fontsize=36, color='w', zorder=20,
+                   ha='right')
+
+        # Riverine
+        scatter.append(ax[4].scatter(rp_lon_list, rp_lat_list, s=75*(np.log(rp_list)-4.5)**2,
+                                     marker='o', linewidths=1, facecolors='none',
+                                     edgecolors=cmrp, zorder=5))
+
+        ax[4].add_feature(land_10m)
+        gl.append(ax[4].gridlines(crs=ccrs.PlateCarree(), draw_labels=True,
+                                  linewidth=1, color='white', linestyle='-', zorder=11))
+        gl[3].xlocator = mticker.FixedLocator(np.arange(-200, 200, 20))
+        gl[3].ylocator = mticker.FixedLocator(np.arange(-80, 120, 20))
+        gl[3].xlabels_top = False
+        gl[3].ylabels_right = False
+        gl[3].ylabel_style = {'size': 28}
+        gl[3].xlabel_style = {'size': 28}
+
+        ax[4].text(137, -37, 'Riverine input', fontsize=36, color='w', zorder=20,
+                   ha='right')
+
+        # Colorbar
+        cb1 = plt.colorbar(ScalarMappable(norm=norm, cmap=cmr.torch),
+                           cax=ax[5], orientation='vertical')
+        cb1.set_label('Annual plastic flux (tonnes)', size=28)
+        ax[5].tick_params(axis='y', labelsize=24)
+
+
+        s_lons = [46.35, 55.47, 39.8, 53.9, 72.75, 73.25, 72.0, 57.6, 43.5]
+        s_lats = [-9.4, -4.67, -5.15, 12.5, 11.5, 3.75, -6.25, -20.25, -12]
+        s_names = ['Aldabra', 'Mahé', 'Pemba', 'Socotra', 'Lakshadweep', 'Maldives', 'Chagos', 'Mauritius', 'Comoros']
+
+        for i in [3, 4]:
+            for s_lon, s_lat, s_name in zip(s_lons, s_lats, s_names):
+                ax[i].plot(s_lon, s_lat, marker='D', ms=15, color='w', zorder=14)
+                ax[i].text(s_lon+0.5, s_lat+0.5, s_name, fontsize=22, color='w', zorder=15)
+
+        plt.savefig(fh['fig'] + '.pdf', dpi=300)
+        print('MD input figure exported!')
+
+        # cb0 = plt.colorbar(hist[0], cax=ax[1], fraction=0.1)
+        # cb0.set_label('Mass fraction', size=24)
+        # ax[1].tick_params(axis='y', labelsize=24)
+
+
+        # # Masks
+        # cp_mask, rp_mask = np.zeros_like(cp_psi), np.zeros_like(rp_psi)
+        # cp_mask[cp_psi == 0] = 1
+        # rp_mask[rp_psi == 0] = 1
+
+        # # Cells within distance
+        # vis_dist = 10
+        # cp_mask2 = distance_transform_edt(cp_mask)
+        # cp_mask2[cp_mask2 > vis_dist] = 0
+        # cp_mask2[cp_mask2 > 0] = 1
+        # cp_mask2[cp_psi > 0] = 1
+
+        # rp_mask2 = distance_transform_edt(rp_mask)
+        # rp_mask2[rp_mask2 > vis_dist] = 0
+        # rp_mask2[rp_mask2 > 0] = 1
+        # rp_mask2[rp_psi > 0] = 1
+
+        # # Now fill with nearest value
+        # cp_psi = np.ma.masked_where(cp_psi == 0, cp_psi)
+        # lon_psi_grid_c = np.ma.masked_where(np.ma.getmask(cp_psi), lon_psi_grid)
+        # lat_psi_grid_c = np.ma.masked_where(np.ma.getmask(cp_psi), lat_psi_grid)
+        # cp_psi_list = cp_psi.compressed()
+        # cp_lon_list = lon_psi_grid_c.compressed()
+        # cp_lat_list = lat_psi_grid_c.compressed()
+
+        # cp_points = np.concatenate((cp_lon_list, cp_lat_list)).reshape((2, -1)).T
+        # cp_viz = griddata(cp_points, cp_psi_list, (lon_psi_grid, lat_psi_grid), method='nearest')
+        # cp_viz *= cp_mask2
+
+        # rp_psi = np.ma.masked_where(rp_psi == 0, rp_psi)
+        # lon_psi_grid_r = np.ma.masked_where(np.ma.getmask(rp_psi), lon_psi_grid)
+        # lat_psi_grid_r = np.ma.masked_where(np.ma.getmask(rp_psi), lat_psi_grid)
+        # rp_psi_list = rp_psi.compressed()
+        # rp_lon_list = lon_psi_grid_r.compressed()
+        # rp_lat_list = lat_psi_grid_r.compressed()
+
+        # rp_points = np.concatenate((rp_lon_list, rp_lat_list)).reshape((2, -1)).T
+        # rp_viz = griddata(rp_points, rp_psi_list, (lon_psi_grid, lat_psi_grid), method='nearest')
+        # rp_viz *= rp_mask2
+
+        # plastic_name = [' direct coastal ', ' riverine ']
+        # plastic_fh = ['_coasts.png', '_rivers.png']
+        # plastic_data = [cp_viz, rp_viz]
+
+        # for i in range(2):
+        #     # Plot coastal plastics
+        #     f, ax = plt.subplots(1, 1, figsize=(20, 10),
+        #                          subplot_kw={'projection': ccrs.PlateCarree()})
+        #     f.subplots_adjust(hspace=0, wspace=0, top=0.925, left=0.1)
+        #     ax.set_xlim([-90, 180])
+        #     ax.set_ylim([-65, 65])
+
+        #     # Plot the locations
+        #     cmap = cmr.gem_r
+        #     cp_pcolor = ax.pcolormesh(lon_psi, lat_psi, plastic_data[i], cmap=cmap,
+        #                               norm=colors.LogNorm(vmin=param['threshold'], vmax=1e6),
+        #                               transform=ccrs.PlateCarree(), zorder=2)
+
+        #     # Add land
+        #     ax.pcolormesh(lon_psi, lat_psi,
+        #                   np.ma.masked_where(lsm_psi == 0, lsm_psi),
+        #                   cmap=cmr.neutral_r, vmin=0, vmax=2,
+        #                   transform=ccrs.PlateCarree(), zorder=3)
+        #     ax.axis('off')
+
+        #     # Add cartographic features
+        #     gl = ax.gridlines(crs=ccrs.PlateCarree(), draw_labels=True,
+        #                       linewidth=0.8, color='black', linestyle='--', zorder=11)
+        #     gl.xlocator = mticker.FixedLocator(np.arange(-90, 210, 30))
+        #     gl.ylocator = mticker.FixedLocator(np.arange(-90, 120, 30))
+        #     gl.xlabels_top = False
+        #     gl.ylabels_right = False
+
+        #     cax = f.add_axes([ax.get_position().x1+0.01,ax.get_position().y0-0.015,0.015,ax.get_position().height+0.03])
+
+        #     cb = plt.colorbar(cp_pcolor, cax=cax, pad=0.1)
+        #     cb.set_label('Estimated' + plastic_name[i] + 'plastic flux to ocean (kg/yr)', size=12)
+        #     ax.set_aspect('auto', adjustable=None)
+        #     ax.margins(x=-0.01, y=-0.01)
+        #     plt.savefig(fh['fig'] + plastic_fh[i], dpi=300)
+        #     plt.close()
 
     # Extract cell grid indices
     p_psi = (cp_psi/10) + rp_psi # Assume 10% of coastal plastic enters for this calculation

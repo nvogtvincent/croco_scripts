@@ -12,14 +12,12 @@ import matplotlib.colors as colors
 import matplotlib.ticker as mticker
 import cmasher as cmr
 import xarray as xr
-from netCDF4 import Dataset
-from datetime import timedelta, datetime
-from glob import glob
-import time
+from osgeo import gdal, osr
 from skimage.measure import block_reduce
 from matplotlib.gridspec import GridSpec
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
+import rasterio
 
 # PARAMETERS
 param = {'grid_res': 1.0,                          # Grid resolution in degrees
@@ -35,10 +33,13 @@ param = {'grid_res': 1.0,                          # Grid resolution in degrees
          'y1'  : 2012,
 
          # Physics
-         'mode': '0000',
+         'mode': '0010',
 
          # Sink sites
          'sites': np.array([1]),
+
+         # Plot ship tracks
+         'tracks': True,
 
          # Export
          'export': True}
@@ -46,12 +47,14 @@ param = {'grid_res': 1.0,                          # Grid resolution in degrees
 # DIRECTORIES
 dirs = {'script': os.path.dirname(os.path.realpath(__file__)),
         'fisheries': os.path.dirname(os.path.realpath(__file__)) + '/../FISHERIES/DATA/PROC/',
+        'shipping': os.path.dirname(os.path.realpath(__file__)) + '/../SHIPPING/',
         'fig': os.path.dirname(os.path.realpath(__file__)) + '/../FIGURES/'}
 
 # FILE HANDLES
 fh = {'flux': dirs['script'] + '/marine_flux_' + param['mode'] + '_' + np.array2string(param['sites'], separator='-') + '_s' + str(param['us_d']) + '_b' + str(param['ub_d']) + '.nc',
       'drift_time': dirs['script'] + '/marine_drift_time_' + param['mode'] + '_' + np.array2string(param['sites'], separator='-') + '_s' + str(param['us_d']) + '_b' + str(param['ub_d']) + '.nc',
-      'debris': dirs['fisheries'] + 'GFW_gridded.nc'}
+      'debris': dirs['fisheries'] + 'GFW_gridded.nc',
+      'shipping': dirs['shipping'] + 'shipping_2008.tif'}
 
 n_years = param['y1']-param['y0']+1
 ##############################################################################
@@ -73,6 +76,61 @@ tmatrix_mean_12 = block_reduce(tmatrix_mean, block_size=(12, 12), func=np.mean)
 
 # Open debris input functions (from fisheries)
 debris = xr.open_dataset(fh['debris'])
+
+# Open ship tracks
+
+with rasterio.open(fh['shipping']) as src:
+    img = src.read(1)
+    height = img.shape[0]
+    width = img.shape[1]
+    cols, rows = np.meshgrid(np.arange(width), np.arange(height))
+    xs, ys = rasterio.transform.xy(src.transform, rows, cols)
+    lons= np.array(xs)
+    lats = np.array(ys)
+
+img = block_reduce(img[:10520, :15700], (20, 20), np.sum)
+lons = lons[:10520, :15700][::20, ::20]
+lats = lats[:10520, :15700][::20, ::20]
+
+# if param['tracks']:
+#     ship_data_obj = gdal.Open(fh['shipping'])
+#     ship_data = ship_data_obj.ReadAsArray()[:]
+
+#     # Coordinate system
+#     old_cs = osr.SpatialReference()
+#     old_cs.ImportFromWkt(ship_data_obj.GetProjectionRef())
+#     wgs84_wkt = """
+#     GEOGCS["WGS 84",
+#         DATUM["WGS_1984",
+#             SPHEROID["WGS 84",6378137,298.257223563,
+#                 AUTHORITY["EPSG","7030"]],
+#             AUTHORITY["EPSG","6326"]],
+#         PRIMEM["Greenwich",0,
+#             AUTHORITY["EPSG","8901"]],
+#         UNIT["degree",0.01745329251994328,
+#             AUTHORITY["EPSG","9122"]],
+#         AUTHORITY["EPSG","4326"]]"""
+#     new_cs = osr.SpatialReference()
+#     new_cs.ImportFromWkt(wgs84_wkt)
+#     transform = osr.CoordinateTransformation(old_cs, new_cs)
+
+#     xdim = ship_data_obj.RasterXSize
+#     ydim = ship_data_obj.RasterYSize
+#     gt = ship_data_obj.GetGeoTransform()
+#     x_lim = [gt[0], gt[0] + xdim*gt[1] + ydim*gt[2]]
+#     y_lim = [gt[3], gt[3] + xdim*gt[4] + ydim*gt[5]]
+
+#     img_lon_lim = [transform.TransformPoint(x_lim[0], y_lim[0])[1],
+#                     transform.TransformPoint(x_lim[1], y_lim[0])[1]]
+#     img_lat_lim = [transform.TransformPoint(x_lim[0], y_lim[0])[0],
+#                     transform.TransformPoint(x_lim[0], y_lim[1])[0]]
+
+#     lon_arr = np.linspace(img_lon_lim[0], img_lon_lim[1], num=xdim)
+#     lat_arr = np.linspace(img_lat_lim[0], img_lat_lim[1], num=ydim)
+
+#     SA = 9.55**2 # (see https://allencoralatlas.org/methods/)
+
+#     img_lon, img_lat = np.meshgrid(lon_arr, lat_arr)
 
 ##############################################################################
 # PLOT                                                                       #
@@ -113,13 +171,20 @@ gl[0].xlocator = mticker.FixedLocator(np.arange(-210, 210, 10))
 gl[0].ylocator = mticker.FixedLocator(np.arange(-90, 120, 10))
 gl[0].xlabels_top = False
 gl[0].ylabels_right = False
-gl[0].ylabel_style = {'size': 18}
-gl[0].xlabel_style = {'size': 18}
-ax[0].text(21, -39, 'Likelihood of debris of marine origin beaching at Aldabra', fontsize=36, color='w', fontweight='bold')
+gl[0].ylabel_style = {'size': 24}
+gl[0].xlabel_style = {'size': 24}
+ax[0].text(21, -39, 'Likelihood of debris beaching at Aldabra', fontsize=42, color='w', fontweight='bold')
+ax[0].set_xlim([20, 130])
+ax[0].set_ylim(-40, 30)
+# Add an overlay with ship tracks
+thresh = 500
+img = np.ma.masked_where(img < thresh, img)
+ax[0].pcolormesh(lons, lats, img, cmap=cmr.neutral_r, vmin=thresh-1, vmax=thresh,
+                 transform=ccrs.PlateCarree(), alpha=0.3, rasterized=True)
 
 cb0 = plt.colorbar(hist[0], cax=ax[1], fraction=0.1)
 cb0.set_label('Mass fraction', size=24)
-ax[1].tick_params(axis='y', labelsize=18)
+ax[1].tick_params(axis='y', labelsize=24)
 
 # Input from purse seiners
 ps_input = fmatrix_mean_12*debris['purse_seiners_A_time_integral']
@@ -128,7 +193,7 @@ hist.append(ax[2].pcolormesh(debris.coords['lon_bnd'], debris.coords['lat_bnd'],
                              cmap=cmr.ghostlight, norm=colors.LogNorm(vmin=1e-3, vmax=1e0),
                              transform=ccrs.PlateCarree(), rasterized=True))
 ax[2].add_feature(land_10m)
-ax[2].text(21, -39, 'Purse seiners', fontsize=18, color='w', fontweight='bold')
+ax[2].text(21, -39, 'Purse seiners', fontsize=24, color='w', fontweight='bold')
 
 # Input from drifting and set longlines
 ll_input = fmatrix_mean_12*debris['longlines_A_time_integral']
@@ -137,7 +202,7 @@ hist.append(ax[3].pcolormesh(debris.coords['lon_bnd'], debris.coords['lat_bnd'],
                              cmap=cmr.ghostlight, norm=colors.LogNorm(vmin=1e-3, vmax=1e0),
                              transform=ccrs.PlateCarree(), rasterized=True))
 ax[3].add_feature(land_10m)
-ax[3].text(21, -39, 'Set/drifting longlines', fontsize=18, color='w', fontweight='bold')
+ax[3].text(21, -39, 'Set/drifting longlines', fontsize=24, color='w', fontweight='bold')
 
 # Input from pole and line and trollers
 pl_input = fmatrix_mean_12*debris['pole_and_line_and_trollers_A_time_integral']
@@ -146,11 +211,11 @@ hist.append(ax[4].pcolormesh(debris.coords['lon_bnd'], debris.coords['lat_bnd'],
                              cmap=cmr.ghostlight, norm=colors.LogNorm(vmin=1e-3, vmax=1e0),
                              transform=ccrs.PlateCarree(), rasterized=True))
 ax[4].add_feature(land_10m)
-ax[4].text(21, -39, 'Pole and line/trollers', fontsize=18, color='w', fontweight='bold')
+ax[4].text(21, -39, 'Pole and line/trollers', fontsize=24, color='w', fontweight='bold')
 
 cb1 = plt.colorbar(hist[1], cax=ax[5])
 cb1.set_label('Normalised source strength', size=24)
-ax[5].tick_params(axis='y', labelsize=18)
+ax[5].tick_params(axis='y', labelsize=24)
 
 for ii, i in enumerate([2, 3, 4]):
     gl.append(ax[i].gridlines(crs=ccrs.PlateCarree(), draw_labels=True,
@@ -164,8 +229,6 @@ for ii, i in enumerate([2, 3, 4]):
 
 if param['export']:
     plt.savefig(dirs['fig'] + 'marine_sources_' + param['mode'] + '_' + np.array2string(param['sites'], separator='-') + '_s' + str(param['us_d']) + '_b' + str(param['ub_d']) + '.pdf', bbox_inches='tight', dpi=300)
-
-plt.close()
 
 
 

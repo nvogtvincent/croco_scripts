@@ -14,6 +14,7 @@ from netCDF4 import Dataset
 from datetime import datetime
 from glob import glob
 from tqdm import tqdm
+from sys import argv
 
 ##############################################################################
 # DIRECTORIES & PARAMETERS                                                   #
@@ -24,18 +25,18 @@ param = { # Runtime parameters
          'dt': 3600,    # Simulation timestep (s)
 
          # Analysis parameters
-         'us_d': 1825,    # Sinking timescale (days)
-         'ub_d': 20,      # Beaching timescale (days)
+         'us_d': int(argv[1]),    # Sinking timescale (days)
+         'ub_d': int(argv[2]),      # Beaching timescale (days)
 
          # Time range
          'y0'  : 1993,
          'y1'  : 2014,
 
          'r_frac': 1.0,     # Fraction of riverine plastics
-         'c_frac': 0.1,     # Fraction of coastal plastics
+         'c_frac': float(argv[3]),     # Fraction of coastal plastics
 
          # Physics
-         'mode': '0000'
+         'mode': argv[4]
          }
 
 # DIRECTORIES
@@ -194,8 +195,6 @@ def convert_events(fh_list, dt, us, ub, n_events, **kwargs):
                 time_at_sink_array = np.zeros_like(raw_event_array, dtype=np.int32)
                 prior_tb_array = np.zeros_like(raw_event_array, dtype=np.int32)
                 prior_ts_array = np.zeros_like(raw_event_array, dtype=np.int32)
-                post_ts_array = time_at_sink_array + prior_ts_array
-                post_tb_array = time_at_sink_array + prior_tb_array
 
                 converted_arrays = translate_events_para(raw_event_array)
 
@@ -203,6 +202,8 @@ def convert_events(fh_list, dt, us, ub, n_events, **kwargs):
                 time_at_sink_array[:] = converted_arrays[1]*dt
                 prior_tb_array[:] = converted_arrays[2]*dt
                 prior_ts_array[:] = converted_arrays[3]*dt
+                post_tb_array = time_at_sink_array + prior_tb_array
+                post_ts_array = time_at_sink_array + prior_ts_array
 
                 # Now calculate plastic loss
                 post_mass = np.exp(-(us*post_ts_array)-(ub*post_tb_array))
@@ -337,8 +338,8 @@ print('Total particles released: ' + str(total_stats[1]))
 print('Total events: ' + str(total_stats[2]))
 print('Total full events: ' + str(total_stats[3]))
 
-save_fh_f = dirs['script'] + 'terrestrial_flux_' + param['mode'] + '_s' + str(param['us_d']) + '_b' + str(param['ub_d']) + '.nc'
-save_fh_t = dirs['script'] + 'terrestrial_drift_time_' + param['mode'] + '_s' + str(param['us_d']) + '_b' + str(param['ub_d']) + '.nc'
+save_fh_f = dirs['script'] + '/land_flux_' + param['mode'] + '_s' + str(param['us_d']) + '_b' + str(param['ub_d']) + '_c' + str(param['c_frac']) + '.nc'
+save_fh_t = dirs['script'] + '/land_drift_time_' + param['mode'] + '_s' + str(param['us_d']) + '_b' + str(param['ub_d']) + '_c' + str(param['c_frac']) +'.nc'
 
 for matrix in [fmatrix, tmatrix]:
     matrix.attrs['us'] = param['us_d']

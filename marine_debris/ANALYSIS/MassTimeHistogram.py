@@ -24,7 +24,7 @@ import cmasher as cmr
 # PARAMETERS
 param = {# Analysis parameters
          'ls_d': 3650,      # Sinking timescale (days)
-         'lb_d': 20,        # Beaching timescale (days)
+         'lb_d': 100,        # Beaching timescale (days)
          'title': 'Drift time for mass accumulation at Seychelles, l(s)=10a, l(b)=20d',
          'cmap': cmr.guppy_r
          }
