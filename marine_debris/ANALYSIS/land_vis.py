@@ -17,21 +17,20 @@ import pickle
 param = {# Analysis parameters
          'us_d': 360.0,    # Sinking timescale (days)
          'ub_d': 30.0,      # Beaching timescale (days)
-         'c_frac': 0.25, # Fraction of coastal plastics entering the ocean
-
-         # Time range
-         'y0'  : 1993,
-         'y1'  : 2014,
 
          # Physics
-         'mode': '0000',
+         'mode': '0030',
+
+         # Name
+         'name': 'Class C',
 
          # CMAP
          'cmap': cmr.guppy_r,
-         'write_cmap': True, # Whether to write cmap data (good w/ 100/0010)
+         'write_cmap': False, # Whether to write cmap data (good w/ 100/0010)
          'n_source': 10,
 
          # Export
+         'legend': True,
          'export': True}
 
 # DIRECTORIES
@@ -47,8 +46,6 @@ fh = {'flux': dirs['script'] + '/terrestrial_flux_' + param['mode'] + '_s' + str
       'cmap': dirs['fig'] + 'cmap_data.pkl',
       'fig1': dirs['fig'] + 'terrestrial_sources_' + param['mode'] + '_s' + str(param['us_d']) + '_b' + str(param['ub_d']) + '.pdf',
       'fig2': dirs['fig'] + 'terrestrial_drift_time_' + param['mode'] + '_s' + str(param['us_d']) + '_b' + str(param['ub_d']) + '.pdf'}
-
-n_years = param['y1']-param['y0']+1
 
 
 ##############################################################################
@@ -122,6 +119,7 @@ else:
     fmatrix[fmatrix['source'] == 'Other'] = other_flux
     fmatrix = fmatrix/fmatrix.sum(dim='source')
 
+    # fmatrix_norm.loc[:, 'Reunion'].sortby(fmatrix_norm.loc[:, 'Reunion'], ascending=False).coords['source']
     # Reorder
     fmatrix_order = fmatrix_pop.copy()
     fmatrix_order = fmatrix_order[fmatrix_order['source'].isin(l1_source)]
@@ -142,7 +140,10 @@ else:
 # PLOT                                                                       #
 ##############################################################################
 
-f, ax = plt.subplots(1, 1, figsize=(40, 30), constrained_layout=True)
+if param['legend']:
+    f, ax = plt.subplots(1, 1, figsize=(20, 8))
+else:
+    f, ax = plt.subplots(1, 1, figsize=(20, 8))
 
 # Set up grouping
 spacing = 1
@@ -191,10 +192,10 @@ for i in range(n_sink):
 grp_mp = np.concatenate((grp_mp[:-1], xpos[-9:]))
 
 ax.set_xticks(grp_mp)
-ax.set_xticklabels(['Aldabra Group', 'Farquhar Group', 'Alphonse Group',
-                    'Amirante Islands', 'Southern Coral Group', 'Seychelles Plateau',
-                    'CMR', 'MYT', 'LKS', 'MDV', 'MRT', 'REU', 'PMB', 'SCT', 'CHA'], fontsize=32)
-ax.tick_params(axis='y', labelsize=28)
+ax.set_xticklabels(['ALD', 'FAR', 'ALP',
+                    'AMI', 'SCG', 'SEY',
+                    '1', '2', '3', '4', '5', '6', '7', '8', '9'], fontsize=24)
+ax.tick_params(axis='y', labelsize=24)
 
 ax.set_ylim([0, 1])
 ax.set_xlim([xpos[0]-width, xpos[-1]+width])
@@ -202,20 +203,21 @@ ax.spines['left'].set_visible(False)
 ax.spines['right'].set_visible(False)
 ax.spines['top'].set_visible(False)
 ax.spines['bottom'].set_visible(False)
-ax.set_ylabel('Proportion of terrestrial debris from source', fontsize=36)
-# ax.set_title(param['title'], y=1.02)
+ax.set_ylabel('Proportion of terrestrial debris', fontsize=24)
+ax.set_title(param['name'] + ' debris sources', fontsize=28, color='k', fontweight='bold', pad=12)
 
-ax.legend(loc="lower center", bbox_to_anchor=(0.5, -0.07), ncol=param['n_source'],
-          frameon=False, fontsize=28)
+if param['legend']:
+    ax.legend(loc="lower center", bbox_to_anchor=(0.5, -0.3), ncol=int(param['n_source']/2),
+              frameon=False, fontsize=24)
 
-plt.savefig(fh['fig1'], dpi=300)
+plt.savefig(fh['fig1'], dpi=300, bbox_inches="tight")
 
 # Now plot a mass-time histogram for Aldabra only
 reduction_ratio = 2
 dpy = 365
 new_time_axis = block_reduce(dtmatrix.coords['drift_time'], (reduction_ratio,), func=np.mean)/365
 width = new_time_axis[1] - new_time_axis[0]
-site_chosen = 'Aldabra'
+site_chosen = 'Alphonse'
 f, ax = plt.subplots(1, 1, figsize=(40, 7), constrained_layout=True)
 cumsum = np.zeros_like(block_reduce(dtmatrix.loc[dtmatrix.coords['source'].values[j], site_chosen, :], block_size=(reduction_ratio,), func=np.sum))
 
@@ -236,9 +238,9 @@ ax.spines['right'].set_visible(False)
 ax.spines['top'].set_visible(False)
 ax.spines['bottom'].set_visible(False)
 # ax.set_ylabel('Proportion of terrestrial debris from source', fontsize=36)
-ax.set_xlabel('Drifting time (years)', fontsize=32)
-ax.tick_params(axis='x', labelsize=28)
+ax.set_xlabel('Drifting time (years)', fontsize=24)
+ax.tick_params(axis='x', labelsize=20)
 ax.set_yticklabels([])
 # ax.legend(loc="lower center", bbox_to_anchor=(0.5, -1), ncol=param['n_source'],
 #           frameon=False, fontsize=28)
-plt.savefig(fh['fig2'], dpi=300)
+plt.savefig(fh['fig2'], dpi=300, bbox_inches="tight")

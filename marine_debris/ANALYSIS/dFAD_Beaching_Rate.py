@@ -45,10 +45,10 @@ dirs = {'script': os.path.dirname(os.path.realpath(__file__)),
         'fig': os.path.dirname(os.path.realpath(__file__)) + '/../FIGURES/'}
 
 # FILE HANDLES
-fh = {'dfad': [dirs['dfad'] + 'dfad_trajs.gpkg',
-               dirs['dfad'] + 'dfad_beachings.gpkg',
-               dirs['dfad'] + 'dfad_deployments.gpkg',
-               dirs['dfad'] + 'dfad_pts.gpkg'],
+fh = {'dfad': [dirs['dfad'] + 'dfad_info.gpkg',
+               dirs['dfad'] + 'dfad_beach.gpkg',
+               dirs['dfad'] + 'dfad_deploy.gpkg',
+               dirs['dfad'] + 'dfad_traj.gpkg'],
       'gebco': dirs['grid'] + 'LOC/gebco_2021/GEBCO_2021.nc',
       'coast_005deg': dirs['grid'] + 'LOC/coastal_mask/coastal_mask_005.gpkg',
       'coast_083deg': dirs['grid'] + 'LOC/coastal_mask/GSHHS_h_L1_buffer083_res005.tif',
@@ -65,12 +65,12 @@ dfad_data_all = {'info': gpd.read_file(fh['dfad'][0]),
                  'deploy': gpd.read_file(fh['dfad'][2]),
                  'traj': gpd.read_file(fh['dfad'][3])}
 
-dfad_data_all['info']['strt_dt'] = pd.to_datetime(dfad_data_all['info']['strt_dt'], format='%Y-%m-%d')
-dfad_data_all['info']['end_dat'] = pd.to_datetime(dfad_data_all['info']['end_dat'], format='%Y-%m-%d')
-dfad_data_all['beach']['frst_p_'] = pd.to_datetime(dfad_data_all['beach']['frst_p_'], format='%Y-%m-%d')
-dfad_data_all['beach']['lst_pt_'] = pd.to_datetime(dfad_data_all['beach']['lst_pt_'], format='%Y-%m-%d')
-dfad_data_all['deploy']['pt_date'] = pd.to_datetime(dfad_data_all['deploy']['pt_date'], format='%Y-%m-%d')
-dfad_data_all['traj']['pt_date'] = pd.to_datetime(dfad_data_all['traj']['pt_date'], format='%Y-%m-%d')
+dfad_data_all['info']['start_date'] = pd.to_datetime(dfad_data_all['info']['start_date'], format='%Y-%m-%dT%H:%M:%S')
+dfad_data_all['info']['end_date'] = pd.to_datetime(dfad_data_all['info']['end_date'], format='%Y-%m-%dT%H:%M:%S')
+dfad_data_all['beach']['first_pt_date'] = pd.to_datetime(dfad_data_all['beach']['first_pt_date'], format='%Y-%m-%dT%H:%M:%S')
+dfad_data_all['beach']['last_pt_date'] = pd.to_datetime(dfad_data_all['beach']['last_pt_date'], format='%Y-%m-%dT%H:%M:%S')
+dfad_data_all['deploy']['pt_date'] = pd.to_datetime(dfad_data_all['deploy']['pt_date'], format='%Y-%m-%dT%H:%M:%S')
+dfad_data_all['traj']['pt_date'] = pd.to_datetime(dfad_data_all['traj']['pt_date'], format='%Y-%m-%dT%H:%M:%S')
 
 # Load coarse + rasterised 0.083deg coastal mask ##############################
 coast83 = xr.open_rasterio(fh['coast_083deg'])
@@ -104,8 +104,8 @@ prox_beach_arr = []              # Proximity beaching criterion
 bath_beach_arr = []              # Depth beaching criterion
 kaandorp_beach_arr = []          # Quasi-depth criterion similar to Kaandorp 2020, i.e. check if points 30 arc-seconds to the N/E/S/W of last location has a positive elevation
 
-imzilen_coast_time = []          # Time spent at coast through Imzilen 2021 criterion
-other_coast_time = []            # Time spent at coast for other criteria
+imzilen_coast_time = []          # Time spent at coast (following Imzilen)
+other_coast_time = []            # Time spent at coast (following 100m threshold)
 
 for i, dfad_id in tqdm(enumerate(id_list), total=len(id_list)):
     dfad_data = {'info': dfad_data_all['info'].loc[dfad_data_all['info']['buoy_id'] == dfad_id],
@@ -114,48 +114,24 @@ for i, dfad_id in tqdm(enumerate(id_list), total=len(id_list)):
                  'traj': dfad_data_all['traj'].loc[dfad_data_all['traj']['buoy_id'] == dfad_id]}
 
     # Firstly calculate the number of deployments
-    deployment_sections = np.unique(dfad_data['traj']['sctn_nm'])
+    deployment_sections = np.unique(dfad_data['traj']['section_num'])
     deployment_n = len(deployment_sections)
 
     for j, sec in enumerate(deployment_sections):
-        pos = dfad_data['traj'].loc[dfad_data['traj']['sctn_nm'] == sec].copy()
-        pos_beach = dfad_data['beach'].loc[(dfad_data['beach']['frst_p_'] >= pos['pt_date'].iloc[0]) &
-                                           (dfad_data['beach']['lst_pt_'] <= pos['pt_date'].iloc[-1])]
+        pos = dfad_data['traj'].loc[dfad_data['traj']['section_num'] == sec].copy()
+        pos_beach = dfad_data['beach'].loc[(dfad_data['beach']['first_pt_date'] >= pos['pt_date'].iloc[0]) &
+                                           (dfad_data['beach']['first_pt_date'] <= pos['pt_date'].iloc[-1])]
 
         # Evaluate coastal status of trajectory locations
         coast_intersection = coast83.interp(coords={'x': xr.DataArray(pos['geometry'].x.values, dims='z'),
                                                     'y': xr.DataArray(pos['geometry'].y.values, dims='z')},
                                             method='nearest').values[0]
 
+
         if np.sum(coast_intersection) > 0:
             # FIRST PROCESSING STEP:
-            # Estimate the time represented by each time frame
-
-            # Firstly test if this is a regularly broadcasting dFAD (return [COUNTS PER DAY] [OCCURANCES])
-            freq_counts = np.unique(np.unique(pos['pt_date'], return_counts=True)[1], return_counts=True)
-
-            # If > 95% of occurances are a constant count per day, then assume this is a regularly broadcasting dFAD
-            # However, only do this if that frequency is the highest frequency available (otherwise you could)
-            # end up with >24 hours being represented by one day
-            if np.max(freq_counts[1])/np.sum(freq_counts[1]) > 0.95 and freq_counts[0][np.argmax(freq_counts[1])] == np.max(freq_counts[0]):
-                # Find the constant frequency
-                const_freq = freq_counts[0][np.argmax(freq_counts[1])]
-                const_freq = 24/const_freq
-
-                # Convert coast_intersection from bool to time (hrs)
-                coast_int_time = coast_intersection*const_freq
-            else:
-                # Otherwise, calculate the time per event as the hours per day divided by
-                # the number of events for that day.
-                coast_events = np.where(coast_intersection == 1)
-                coast_int_time = np.zeros_like(coast_intersection)
-
-                for k in coast_events:
-                    k_time = pos['pt_date'].values[k]
-                    k_occurances = pos['pt_date'].value_counts()[k_time]
-                    coast_int_time[k] = 24/k_occurances
-
-            pos['time_at_coast'] = coast_int_time
+            # Estimate the time represented by each time frame (in seconds)
+            pos['time_at_coast'] = np.gradient(pos['pt_date'].values)*coast_intersection
 
             # Now that we have calculated the time spent on the coast, establish the various
             # beaching criteria
@@ -172,33 +148,36 @@ for i, dfad_id in tqdm(enumerate(id_list), total=len(id_list)):
 
             # 1. Check for mid-trajectory beaching events
             beach_events_in_section = len(pos_beach)
-
             imzilen_criterion_met = False
+
             if beach_events_in_section:
                 # For each beach event, check whether the event ends before the end of the
-                # trajectory
+                # trajectory. If it does, remove that beaching event (to remove non-terminal
+                # beaching events)
+
 
                 for k in range(beach_events_in_section):
-                    if pos_beach['lst_pt_'].values[k] < pos['pt_date'].values[-1]:
-                        pos.drop(pos[(pos['pt_date'] > pos_beach['frst_p_'].values[k]) &
-                                     (pos['pt_date'] < pos_beach['lst_pt_'].values[k])].index,
-                                 inplace=True)
+                    if pos_beach['last_pt_date'].iloc[k] < pos['pt_date'].iloc[-1]:
+                        try:
+                            pos.drop(pos[(pos['pt_date'] > pos_beach['first_pt_date'].iloc[k]) &
+                                         (pos['pt_date'] < pos_beach['last_pt_date'].iloc[k])].index,
+                                     inplace=True)
+                        except:
+                            print()
 
 
                 # 2. Now check whether the trajectory end coincides with an Imzilen beaching
-                #    event. If so, calculate the time until the last beaching event starts
+                #    event.
 
                 for k in range(beach_events_in_section):
-                    if (pos['pt_date'].values[-1] <= pos_beach['lst_pt_'].values[k] and
-                        pos['pt_date'].values[-1] >= pos_beach['frst_p_'].values[k]):
+                    if (pos['pt_date'].iloc[-1] <= pos_beach['last_pt_date'].iloc[k] and
+                        pos['pt_date'].iloc[-1] >= pos_beach['first_pt_date'].iloc[k]):
 
-                        imzilen_coast_time.append(pos['time_at_coast'].loc[pos['pt_date'] <= pos_beach['frst_p_'].values[k]].sum())
                         imzilen_beach_arr.append(1)
                         imzilen_criterion_met = True
 
             if not imzilen_criterion_met:
                 # If no Imzilen beach event, append a 0 and the coast time
-                imzilen_coast_time.append(pos['time_at_coast'].sum())
                 imzilen_beach_arr.append(0)
 
             # 3. Now check for the remaining beaching criteria based on the cut
@@ -239,7 +218,7 @@ for i, dfad_id in tqdm(enumerate(id_list), total=len(id_list)):
                 kaandorp_criterion_met = False
 
             # Now keep stepping backwards until the point has moved more than 100m from the final location
-            if kaandorp_criterion_met + depth_criterion_met + prox_criterion_met:
+            if kaandorp_criterion_met + depth_criterion_met + prox_criterion_met + imzilen_criterion_met:
                 criterion_met = True
                 k = 0
 
@@ -265,15 +244,17 @@ for i, dfad_id in tqdm(enumerate(id_list), total=len(id_list)):
                         prox_criterion_met = False
 
                 if k == 1:
-                    adjusted_coast_time = pos['time_at_coast'].sum()
+                    adjusted_coast_time = pos['time_at_coast'].sum().total_seconds()/3600
                 elif k == len(pos):
                     adjusted_coast_time = 0
                 else:
-                    adjusted_coast_time = pos['time_at_coast'].iloc[:1-k].sum()
+                    adjusted_coast_time = pos['time_at_coast'].iloc[:1-k].sum().total_seconds()/3600
 
                 other_coast_time.append(adjusted_coast_time)
+                imzilen_coast_time.append(pos['time_at_coast'].sum().total_seconds()/3600)
             else:
-                other_coast_time.append(pos['time_at_coast'].sum())
+                imzilen_coast_time.append(pos['time_at_coast'].sum().total_seconds()/3600)
+                other_coast_time.append(pos['time_at_coast'].sum().total_seconds()/3600)
 
             # Now append to arrays
             if prox_criterion_met:

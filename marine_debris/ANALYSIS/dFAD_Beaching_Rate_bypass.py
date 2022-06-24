@@ -102,7 +102,7 @@ other_coast_time = np.load(dirs['dfad'] + 'processed_other_coast_time.npy')  # T
 # that beached at that time step, F. The proportion of unbeached drifters at time
 # step i is therefore (1-F1)*(1-F2)*...*(1-Fi).
 
-max_ct = 15
+max_ct = 30
 num_samples = max_ct+1
 time_axis = np.linspace(0, max_ct, num=num_samples)
 
@@ -116,16 +116,16 @@ coast_time = []
 coast_time.append(other_coast_time/24) # Class 1 (proximity)
 coast_time.append(other_coast_time/24) # Class 2 (bathymetry)
 coast_time.append(other_coast_time/24) # Class 3 (Kaandorp)
-coast_time.append(other_coast_time/24) # Class 4 (imzilen)
+coast_time.append(imzi_coast_time/24)  # Class 4 (imzilen)
 
 # Note - we are not going to use the Imzilen coast time, because upon inspection
 # it looks like there are some trajectories that just stay stuck at the coast
 # that are not identified as being beaching events by their algorithm.
 
-title_arr = ['Proximity criterion',
-             'Bathymetry criterion',
+title_arr = ['Proximity criteria (<30m depth)',
+             'Bathymetry criterion (<500m from coastline)',
              'Kaandorp criterion (>0 +ve elevation 1km to N/E/S/W)',
-             'Imzilen criterion (>1 subsequent positions within 200m over >1 day) ']
+             'Imzilen criterion (>1 subsequent positions within 200m over >1 day)']
 
 # Create figure
 f, ax = plt.subplots(2, 2, figsize=(16, 16), constrained_layout=True, sharex=True)

@@ -9,11 +9,13 @@ import os
 import numpy as np
 import pandas as pd
 import xarray as xr
+import warnings
 from numba import njit
 from netCDF4 import Dataset
 from datetime import datetime
 from glob import glob
 from tqdm import tqdm
+from sys import argv
 
 ##############################################################################
 # DIRECTORIES & PARAMETERS                                                   #
@@ -22,14 +24,12 @@ from tqdm import tqdm
 # PARAMETERS
 param = { # Runtime parameters
          'dt': 3600,    # Simulation timestep (s)
+         'y0': 1993,
+         'y1': 2012,
 
          # Analysis parameters
-         'us_d': 1825,    # Sinking timescale (days)
-         'ub_d': 20,      # Beaching timescale (days)
-
-         # Time range
-         'y0'  : 1993,
-         'y1'  : 2012,
+         'us_d': int(argv[1]),      # Sinking timescale (days)
+         'ub_d': int(argv[2]),      # Beaching timescale (days)
 
          # Grid
          'grid_res': 1/12,         # Grid resolution in degrees
@@ -37,13 +37,13 @@ param = { # Runtime parameters
          'lat_range': [-40, 30],
 
          # Physics
-         'mode': '0000',
+         'mode': argv[3],
 
          # Source/sink time
          'time': 'sink',
 
          # Sink sites
-         'sites': np.array([1])
+         'sites': np.array([12,13,14,15,16,17])
          }
 
 # DIRECTORIES
@@ -153,87 +153,91 @@ def convert_events(fh_list, dt, us, ub, n_events, **kwargs):
 
     # Open all data
     for fhi, fh in tqdm(enumerate(fh_list), total=len(fh_list)):
-        with Dataset(fh, mode='r') as nc:
-            e_num = nc.variables['e_num'][:]
-            n_traj = np.shape(e_num)[0] # Number of trajectories in file
+        try:
+            with Dataset(fh, mode='r') as nc:
+                e_num = nc.variables['e_num'][:]
+                n_traj = np.shape(e_num)[0] # Number of trajectories in file
 
-            if n_traj:
-                # Extract origin date
-                y0 = int(fh.split('/')[-1].split('_')[0])
-                m0 = int(fh.split('/')[-1].split('_')[1])
-                t0 = datetime(year=y0, month=m0, day=1, hour=0)
+                if n_traj:
+                    # Extract origin date
+                    y0 = int(fh.split('/')[-1].split('_')[0])
+                    m0 = int(fh.split('/')[-1].split('_')[1])
+                    t0 = datetime(year=y0, month=m0, day=1, hour=0)
 
-                # Firstly load primary variables into memory
-                raw_event_array = np.zeros((n_traj, n_events), dtype=np.int64)
-                raw_lon0_array = np.zeros((n_traj, n_events), dtype=np.float32)
-                raw_lat0_array = np.zeros((n_traj, n_events), dtype=np.float32)
+                    # Firstly load primary variables into memory
+                    raw_event_array = np.zeros((n_traj, n_events), dtype=np.int64)
+                    raw_lon0_array = np.zeros((n_traj, n_events), dtype=np.float32)
+                    raw_lat0_array = np.zeros((n_traj, n_events), dtype=np.float32)
 
-                for i in range(n_events):
-                    raw_event_array[:, i] = nc.variables['e' + str(i)][:, 0]
+                    for i in range(n_events):
+                        raw_event_array[:, i] = nc.variables['e' + str(i)][:, 0]
 
-                raw_lon0_array[:] = nc.variables['lon0'][:]
-                raw_lat0_array[:] = nc.variables['lat0'][:]
+                    raw_lon0_array[:] = nc.variables['lon0'][:]
+                    raw_lat0_array[:] = nc.variables['lat0'][:]
 
-                # Update stats
-                total_particles += n_traj
-                total_encounters += np.count_nonzero(raw_event_array)
-                total_full_events += np.count_nonzero(raw_event_array[:, -1])
+                    # Update stats
+                    total_particles += n_traj
+                    total_encounters += np.count_nonzero(raw_event_array)
+                    total_full_events += np.count_nonzero(raw_event_array[:, -1])
 
-                # Now flatten arrays
-                raw_event_array = raw_event_array.flatten()
-                mask = raw_event_array != 0
-                raw_event_array = raw_event_array[mask]
+                    # Now flatten arrays
+                    raw_event_array = raw_event_array.flatten()
+                    mask = raw_event_array != 0
+                    raw_event_array = raw_event_array[mask]
 
-                lon0_array = raw_lon0_array.flatten()
-                lon0_array = lon0_array[mask]
+                    lon0_array = raw_lon0_array.flatten()
+                    lon0_array = lon0_array[mask]
 
-                lat0_array = raw_lat0_array.flatten()
-                lat0_array = lat0_array[mask]
+                    lat0_array = raw_lat0_array.flatten()
+                    lat0_array = lat0_array[mask]
 
-                # Now convert events
-                sink_array = np.zeros_like(raw_event_array, dtype=np.int16)
-                time_at_sink_array = np.zeros_like(raw_event_array, dtype=np.int32)
-                prior_tb_array = np.zeros_like(raw_event_array, dtype=np.int32)
-                prior_ts_array = np.zeros_like(raw_event_array, dtype=np.int32)
+                    # Now convert events
+                    sink_array = np.zeros_like(raw_event_array, dtype=np.int16)
+                    time_at_sink_array = np.zeros_like(raw_event_array, dtype=np.int32)
+                    prior_tb_array = np.zeros_like(raw_event_array, dtype=np.int32)
+                    prior_ts_array = np.zeros_like(raw_event_array, dtype=np.int32)
 
-                converted_arrays = translate_events_para(raw_event_array)
+                    converted_arrays = translate_events_para(raw_event_array)
 
-                sink_array[:] = converted_arrays[0]
-                time_at_sink_array[:] = converted_arrays[1]*dt
-                prior_tb_array[:] = converted_arrays[2]*dt
-                prior_ts_array[:] = converted_arrays[3]*dt
-                post_ts_array = time_at_sink_array + prior_ts_array
-                post_tb_array = time_at_sink_array + prior_tb_array
+                    sink_array[:] = converted_arrays[0]
+                    time_at_sink_array[:] = converted_arrays[1]*dt
+                    prior_tb_array[:] = converted_arrays[2]*dt
+                    prior_ts_array[:] = converted_arrays[3]*dt
+                    post_ts_array = time_at_sink_array + prior_ts_array
+                    post_tb_array = time_at_sink_array + prior_tb_array
 
-                # Now calculate plastic loss
-                post_mass = np.exp(-(us*post_ts_array)-(ub*post_tb_array))
-                prior_mass = np.exp(-(us*prior_ts_array)-(ub*prior_tb_array))
-                loss = (ub/(ub+us))*(prior_mass - post_mass)
-                loss = loss.astype('float32')
+                    # Now calculate plastic loss
+                    post_mass = np.exp(-(us*post_ts_array)-(ub*post_tb_array))
+                    prior_mass = np.exp(-(us*prior_ts_array)-(ub*prior_tb_array))
+                    loss = (ub/(ub+us))*(prior_mass - post_mass)
+                    loss = loss.astype('float32')
 
-                # Now form output array
-                frame = pd.DataFrame(data=sink_array, columns=['sink_iso'])
+                    # Now form output array
+                    frame = pd.DataFrame(data=sink_array, columns=['sink_iso'])
 
-                frame['plastic_flux'] = loss
-                frame['days_at_sea'] = prior_ts_array
-                frame['lat0'] = lat0_array
-                frame['lon0'] = lon0_array
-                frame['days_at_sea'] = pd.to_timedelta(frame['days_at_sea'], unit='S')
-                frame['sink_date_'] = frame['days_at_sea'] + t0
-                frame['sink_date'] = frame['sink_date_'].dt.year + (frame['sink_date_'].dt.month-0.5)*(1/12)
-                frame['days_at_sea'] = frame['days_at_sea'].dt.days
-                frame['source_date_'] = pd.to_datetime(t0)
-                frame['source_date'] = frame['source_date_'].dt.year + (frame['source_date_'].dt.month-0.5)*(1/12)
+                    frame['plastic_flux'] = loss
+                    frame['days_at_sea'] = prior_ts_array
+                    frame['lat0'] = lat0_array
+                    frame['lon0'] = lon0_array
+                    frame['days_at_sea'] = pd.to_timedelta(frame['days_at_sea'], unit='S')
+                    frame['sink_date_'] = frame['days_at_sea'] + t0
+                    frame['sink_date'] = frame['sink_date_'].dt.year + (frame['sink_date_'].dt.month-0.5)*(1/12)
+                    frame['days_at_sea'] = frame['days_at_sea'].dt.days
+                    frame['source_date_'] = pd.to_datetime(t0)
+                    frame['source_date'] = frame['source_date_'].dt.year + (frame['source_date_'].dt.month-0.5)*(1/12)
 
-                # Clean up
-                frame.drop(labels=['sink_date_', 'source_date_'], axis=1, inplace=True)
-                frame.reset_index(drop=True)
+                    # Clean up
+                    frame.drop(labels=['sink_date_', 'source_date_'], axis=1, inplace=True)
+                    frame.reset_index(drop=True)
 
-                # Remove unnecessary precision
-                frame = frame.astype({'days_at_sea': 'int16'})
+                    # Remove unnecessary precision
+                    frame = frame.astype({'days_at_sea': 'int16'})
 
-                # Append
-                data_list.append(frame)
+                    # Append
+                    data_list.append(frame)
+        except:
+            warnings.warn('Error reading file ' + fh)
+            continue
 
     data = pd.concat(data_list, axis=0)
     data.reset_index(drop=True)
@@ -291,28 +295,24 @@ if param['time'] == 'sink':
                            dims=['latitude', 'longitude', 'sink_time'])
 
 else:
-    raise NotImplementedError('Not yet implemented')
+    source_time_dec = np.arange(1993, 2013, 1/12) + 1/24
+    source_time = pd.date_range(start=datetime(year=1993, month=1, day=1),
+                                end=datetime(year=2013, month=1, day=1),
+                                freq='M')
+    source_ntime = len(source_time_dec)
+    source_time_bnds = np.arange(1993, 2013 + (1/12), 1/12)
 
-# source_time_dec = np.arange(param['y0'], param['y1']+1, 1/12) + 1/24
-# source_time = pd.date_range(start=datetime(year=param['y0'], month=1, day=1),
-#                             end=datetime(year=param['y1']+1, month=1, day=1),
-#                             freq='M')
+    # Flux matrix dimensions:
+    # LAT | LON | TIME
+    fmatrix = np.zeros((len(lat), len(lon), source_ntime), dtype=np.float32)
+    fmatrix = xr.DataArray(fmatrix, coords=[lat, lon, source_time],
+                           dims=['latitude', 'longitude', 'source_time'])
 
-# source_ntime = len(source_time_dec)
-
-# # Create bounds for source, sink, release_time, and arrival_time
-# source_bnds = source_list['ISO code'].values.astype(np.float32) - 0.5
-# source_bnds = np.append(source_bnds, source_bnds[-1]+1)
-
-
-
-# drift_time_bnds = np.arange(0, 2925, 5) # Days
-# drift_time = 0.5*(drift_time_bnds[:-1] + drift_time_bnds[1:])
-# drift_time_bnds[-1] = 3650
-# n_drift_time = len(drift_time_bnds)-1
-
-# source_time_bnds = np.arange(param['y0'], param['y1'] + (13/12), 1/12)
-#
+    # Time matrix dimensions:
+    # SOURCE | SINK | DRIFT_TIME
+    ftmatrix = np.zeros((len(lat), len(lon), source_ntime), dtype=np.float32)
+    ftmatrix = xr.DataArray(ftmatrix, coords=[lat, lon, source_time],
+                           dims=['latitude', 'longitude', 'source_time'])
 
 for year in np.arange(param['y0'], param['y1']+1):
     for month in np.arange(12):
@@ -325,24 +325,36 @@ for year in np.arange(param['y0'], param['y1']+1):
             data, stats = convert_events(yearmonth_fh, param['dt'], param['us'], param['ub'], 25,
                                          particles_per_file=325233)
 
-            fmatrix += np.histogramdd(np.array([data[data['sink_iso'].isin(param['sites'])]['lat0'],
-                                                data[data['sink_iso'].isin(param['sites'])]['lon0'],
-                                                data[data['sink_iso'].isin(param['sites'])]['sink_date']]).T,
-                                      bins=(lat_bnd, lon_bnd, sink_time_bnds),
-                                      weights=(data[data['sink_iso'].isin(param['sites'])]['plastic_flux']))[0]
+            if param['time'] == 'sink':
+                fmatrix += np.histogramdd(np.array([data[data['sink_iso'].isin(param['sites'])]['lat0'],
+                                                    data[data['sink_iso'].isin(param['sites'])]['lon0'],
+                                                    data[data['sink_iso'].isin(param['sites'])]['sink_date']]).T,
+                                          bins=(lat_bnd, lon_bnd, sink_time_bnds),
+                                          weights=(data[data['sink_iso'].isin(param['sites'])]['plastic_flux']))[0]
 
-            ftmatrix += np.histogramdd(np.array([data[data['sink_iso'].isin(param['sites'])]['lat0'],
-                                                 data[data['sink_iso'].isin(param['sites'])]['lon0'],
-                                                 data[data['sink_iso'].isin(param['sites'])]['sink_date']]).T,
-                                      bins=(lat_bnd, lon_bnd, sink_time_bnds),
-                                       weights=(data[data['sink_iso'].isin(param['sites'])]['plastic_flux']*
-                                                data[data['sink_iso'].isin(param['sites'])]['days_at_sea']))[0]
+                ftmatrix += np.histogramdd(np.array([data[data['sink_iso'].isin(param['sites'])]['lat0'],
+                                                     data[data['sink_iso'].isin(param['sites'])]['lon0'],
+                                                     data[data['sink_iso'].isin(param['sites'])]['sink_date']]).T,
+                                          bins=(lat_bnd, lon_bnd, sink_time_bnds),
+                                           weights=(data[data['sink_iso'].isin(param['sites'])]['plastic_flux']*
+                                                    data[data['sink_iso'].isin(param['sites'])]['days_at_sea']))[0]
+            else:
+                fmatrix += np.histogramdd(np.array([data[data['sink_iso'].isin(param['sites'])]['lat0'],
+                                                    data[data['sink_iso'].isin(param['sites'])]['lon0'],
+                                                    data[data['sink_iso'].isin(param['sites'])]['source_date']]).T,
+                                          bins=(lat_bnd, lon_bnd, source_time_bnds),
+                                          weights=(data[data['sink_iso'].isin(param['sites'])]['plastic_flux']))[0]
 
-            print()
+                ftmatrix += np.histogramdd(np.array([data[data['sink_iso'].isin(param['sites'])]['lat0'],
+                                                     data[data['sink_iso'].isin(param['sites'])]['lon0'],
+                                                     data[data['sink_iso'].isin(param['sites'])]['source_date']]).T,
+                                          bins=(lat_bnd, lon_bnd, source_time_bnds),
+                                           weights=(data[data['sink_iso'].isin(param['sites'])]['plastic_flux']*
+                                                    data[data['sink_iso'].isin(param['sites'])]['days_at_sea']))[0]
 
-
-save_fh_f = dirs['script'] + '/marine_flux_' + param['mode'] + '_' + np.array2string(param['sites'], separator='-') + '_s' + str(param['us_d']) + '_b' + str(param['ub_d']) + '.nc'
-save_fh_ft = dirs['script'] + '/marine_drift_time_' + param['mode'] + '_' + np.array2string(param['sites'], separator='-') + '_s' + str(param['us_d']) + '_b' + str(param['ub_d']) + '.nc'
+array_str = np.array2string(param['sites'], separator='-').translate({ord(i): None for i in '[]'})
+save_fh_f = dirs['script'] + '/marine_' + param['time'] + '_flux_' + param['mode'] + '_' + array_str + '_s' + str(param['us_d']) + '_b' + str(param['ub_d']) + '.nc'
+save_fh_ft = dirs['script'] + '/marine_' + param['time'] + '_drift_time_' + param['mode'] + '_' + array_str + '_s' + str(param['us_d']) + '_b' + str(param['ub_d']) + '.nc'
 
 for matrix in [fmatrix, ftmatrix]:
     matrix.attrs['us'] = param['us_d']

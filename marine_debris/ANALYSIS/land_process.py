@@ -25,7 +25,7 @@ param = { # Runtime parameters
          'dt': 3600,    # Simulation timestep (s)
 
          # Analysis parameters
-         'us_d': int(argv[1]),    # Sinking timescale (days)
+         'us_d': int(argv[1]),      # Sinking timescale (days)
          'ub_d': int(argv[2]),      # Beaching timescale (days)
 
          # Time range
@@ -33,10 +33,10 @@ param = { # Runtime parameters
          'y1'  : 2014,
 
          'r_frac': 1.0,     # Fraction of riverine plastics
-         'c_frac': float(argv[3]),     # Fraction of coastal plastics
+         'c_frac': 0.25,     # Fraction of coastal plastics
 
          # Physics
-         'mode': argv[4]
+         'mode': argv[3]
          }
 
 # DIRECTORIES

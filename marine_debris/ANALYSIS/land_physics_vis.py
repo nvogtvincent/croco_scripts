@@ -20,12 +20,12 @@ from glob import glob
 
 # PARAMETERS
 param = {# Analysis parameters
-         'us_d': 90.0,    # Sinking timescale (days)
+         'us_d': 360.0,    # Sinking timescale (days)
          'ub_d': 30.0,    # Beaching timescale (days)
          'c_frac': 0.25, # Fraction of coastal plastics entering the ocean
 
          # Sink list
-         'sink': ['Aldabra', 'Farquhar', 'Praslin', 'BIOT', 'Pemba', 'Maldives'],
+         'sink': ['Aldabra', 'Farquhar', 'Alphonse', 'Praslin', 'BIOT', 'Pemba', 'Lakshadweep'],
 
          # Time range
          'y0'  : 1993,
@@ -59,11 +59,11 @@ physics_list = ['0000NS', '0000', '0010', '0020', '0030']
 ##############################################################################
 
 # Loop through the five files
-for i, fh_i in enumerate([dirs['script'] + '/terrestrial_flux_' + mode + '_s' + str(param['us_d']) + '_b' + str(param['ub_d']) + '.nc' for mode in physics_list]):
+for i, fh_i in enumerate(sorted([dirs['script'] + '/terrestrial_flux_' + mode + '_s' + str(param['us_d']) + '_b' + str(param['ub_d']) + '.nc' for mode in physics_list])):
     fmatrix = xr.open_dataarray(fh_i)
 
     # Calculate the accumulated fluxes (integrating over 1997-2014 assuming <=1y sink time)
-    fmatrix = fmatrix[:, :, :, 36:264].sum(dim=('source_time', 'sink_time'))
+    fmatrix = fmatrix.sum(dim=('source_time', 'sink_time'))
 
     with open(fh['cmap'], 'rb') as pkl:
         cmap_list = pickle.load(pkl)
@@ -116,16 +116,15 @@ for i, fh_i in enumerate([dirs['script'] + '/terrestrial_flux_' + mode + '_s' + 
                 x_pos.append(x_pos[-1] + spacing + width)
 
             if x_cnt%5 == 0:
-                ax.text(x_pos[-1], 1.01, 'C', ha='center', fontsize=18)
+                ax.text(x_pos[-1], 1.01, 'C', ha='center', fontsize=16, fontweight='bold')
             elif x_cnt%5 == 1:
-                ax.text(x_pos[-1], 1.01, 'CS0', ha='center', fontsize=18)
+                ax.text(x_pos[-1], 1.01, 'CS0', ha='center', fontsize=16, fontweight='bold')
             elif x_cnt%5 == 2:
-                ax.text(x_pos[-1], 1.01, 'CS1', ha='center', fontsize=18)
+                ax.text(x_pos[-1], 1.01, 'CS1', ha='center', fontsize=16, fontweight='bold')
             elif x_cnt%5 == 3:
-                ax.text(x_pos[-1], 1.01, 'CS2', ha='center', fontsize=18)
+                ax.text(x_pos[-1], 1.01, 'CS2', ha='center', fontsize=16, fontweight='bold')
             else:
-                ax.text(x_pos[-1], 1.01, 'CS3', ha='center', fontsize=18)
-
+                ax.text(x_pos[-1], 1.01, 'CS3', ha='center', fontsize=16, fontweight='bold')
 
             x_cnt += 1
 
@@ -155,6 +154,8 @@ for i, fh_i in enumerate([dirs['script'] + '/terrestrial_flux_' + mode + '_s' + 
         ax.legend(loc="lower center", bbox_to_anchor=(0.5, -0.2), ncol=int(param['n_source']/2),
                   frameon=False, fontsize=28)
 
+    print()
+
     for sink_j in range(n_sink):
         cumsum = 0
 
@@ -164,4 +165,4 @@ for i, fh_i in enumerate([dirs['script'] + '/terrestrial_flux_' + mode + '_s' + 
                    bottom=cumsum, color=cmap_list[src_name])
             cumsum += fmatrix.loc[src_name, param['sink'][sink_j]]
 
-plt.savefig(fh['fig'], dpi=300)
+plt.savefig(fh['fig'], dpi=300, bbox_inches="tight")
