@@ -429,14 +429,14 @@ def release_loc_land(param, fh):
         cplot = []
 
         land_10m = cfeature.NaturalEarthFeature('physical', 'land', '10m',
-                                                edgecolor='white',
-                                                facecolor='black',
+                                                edgecolor='w',
+                                                facecolor='w',
                                                 linewidth=0.5,
                                                 zorder=1)
 
         for i in [0, 1, 3, 4]:
             ax[i].set_aspect(1)
-            ax[i].set_facecolor('k')
+            ax[i].set_facecolor('w')
             ax[i].set_xlim([20, 140])
             ax[i].set_ylim([-40, 40])
 
@@ -454,7 +454,7 @@ def release_loc_land(param, fh):
         winter_o_vel = np.sqrt(winter_uo**2 + winter_vo**2)
         summer_o_vel = np.sqrt(summer_uo**2 + summer_vo**2)
 
-        cplot.append(ax[0].pcolormesh(ref_o_lon, ref_o_lat, winter_o_vel, cmap=cmr.cosmic,
+        cplot.append(ax[0].pcolormesh(ref_o_lon, ref_o_lat, winter_o_vel, cmap=cmr.ember_r,
                                       vmin=0, vmax=1.0, transform=ccrs.PlateCarree(),
                                       rasterized=True))
         ax[0].quiver(ref_w_lon[::subset_ref], ref_w_lat[::subset_ref],
@@ -465,7 +465,7 @@ def release_loc_land(param, fh):
 
         ax[0].add_feature(land_10m)
         gl.append(ax[0].gridlines(crs=ccrs.PlateCarree(), draw_labels=True,
-                                  linewidth=1, color='white', linestyle='-', zorder=11))
+                                  linewidth=1, color='k', linestyle='-', zorder=11))
         gl[0].xlocator = mticker.FixedLocator(np.arange(-200, 200, 20))
         gl[0].ylocator = mticker.FixedLocator(np.arange(-80, 120, 20))
         gl[0].xlabels_top = False
@@ -473,10 +473,10 @@ def release_loc_land(param, fh):
         gl[0].ylabel_style = {'size': 36}
         gl[0].xlabel_style = {'size': 36}
 
-        ax[0].text(138, -38, 'Northeast Monsoon (DJF)', fontsize=48, color='w', zorder=20,
+        ax[0].text(138, -38, 'Northeast Monsoon (DJF)', fontsize=48, color='k', zorder=20,
                    fontweight='bold', ha='right')
 
-        cplot.append(ax[1].pcolormesh(ref_o_lon, ref_o_lat, summer_o_vel, cmap=cmr.cosmic,
+        cplot.append(ax[1].pcolormesh(ref_o_lon, ref_o_lat, summer_o_vel, cmap=cmr.ember_r,
                                       vmin=0, vmax=1.0, transform=ccrs.PlateCarree(),
                                       rasterized=True))
 
@@ -488,7 +488,7 @@ def release_loc_land(param, fh):
 
         ax[1].add_feature(land_10m)
         gl.append(ax[1].gridlines(crs=ccrs.PlateCarree(), draw_labels=True,
-                                  linewidth=1, color='white', linestyle='-', zorder=11))
+                                  linewidth=1, color='k', linestyle='-', zorder=11))
         gl[1].xlocator = mticker.FixedLocator(np.arange(-200, 200, 20))
         gl[1].ylocator = mticker.FixedLocator(np.arange(-80, 120, 20))
         gl[1].xlabels_top = False
@@ -496,8 +496,9 @@ def release_loc_land(param, fh):
         gl[1].ylabel_style = {'size': 36}
         gl[1].xlabel_style = {'size': 36}
 
-        ax[1].text(138, -38, 'Southwest monsoon (JJA)', fontsize=48, color='w', zorder=20,
+        ax[1].text(138, -38, 'Southwest monsoon (JJA)', fontsize=48, color='k', zorder=20,
                    fontweight='bold', ha='right')
+
 
         # Colorbar
         cb0 = plt.colorbar(cplot[1], cax=ax[2])
@@ -570,7 +571,7 @@ def release_loc_land(param, fh):
                 ax[i].plot(s_lon, s_lat, marker='D', ms=15, color='w', zorder=14)
                 ax[i].text(s_lon+0.5, s_lat+0.5, s_name, fontsize=36, color='w', zorder=15)
 
-        plt.savefig(fh['fig'] + '.png', dpi=400)
+        plt.savefig(fh['fig'] + '.pdf', dpi=200)
         print('MD input figure exported!')
     elif param['plot_input'] == 'plastic':
 
