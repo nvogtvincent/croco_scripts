@@ -41,7 +41,7 @@ param = {'grid_res': 1.0,                          # Grid resolution in degrees
          'time': 'source',
 
          # Sink sites
-         'sites': np.array([1,2,3,4]),
+         'sites': np.array([13,14,15,16,17,18]),
 
          # Names
          'sink': 'Aldabra Group',
@@ -132,7 +132,7 @@ for i in [0, 2, 3, 4]:
 
 # Total flux
 hist.append(ax[0].pcolormesh(fmatrix.coords['longitude'], fmatrix.coords['latitude'], fmatrix_mean,
-                             cmap=cmr.ember, norm=colors.LogNorm(vmin=1e-5, vmax=1e-2),
+                             cmap=cmr.sunburst_r, norm=colors.LogNorm(vmin=1e-5, vmax=1e-2),
                              transform=ccrs.PlateCarree(), rasterized=True))
 
 ax[0].add_feature(land_10m)
@@ -144,15 +144,17 @@ gl[0].xlabels_top = False
 gl[0].ylabels_right = False
 gl[0].ylabel_style = {'size': 18}
 gl[0].xlabel_style = {'size': 18}
-ax[0].text(21, -39, 'Likelihood of ' + param['class'] + ' debris beaching at ' + param['sink'], fontsize=28, color='w', fontweight='bold')
+ax[0].text(21, -39, 'Likelihood of ' + param['class'] + ' debris beaching at ' + param['sink'], fontsize=28, color='k', fontweight='bold')
 ax[0].set_xlim([20, 130])
 ax[0].set_ylim([-40, 30])
 # Add an overlay with ship tracks
 if param['tracks']:
     thresh = 1e7
     img = np.ma.masked_where(img < thresh, img)
+    # sig_plot = ax[0].contourf(lons, lats, img,
+    #                           levels=np.array([thresh, np.max(img)*2]), colors='k', alpha=0.3)
     sig_plot = ax[0].contourf(lons, lats, img,
-                              levels=np.array([thresh, np.max(img)*2]), hatches=['\\\\\\\\'], colors='none')
+                              levels=np.array([thresh, np.max(img)*2]), colors='none', hatches=['\\\\\\\\'])
 
 
 cb0 = plt.colorbar(hist[0], cax=ax[1], fraction=0.1)
