@@ -40,10 +40,10 @@ param = { # Runtime parameters
          'mode': argv[3],
 
          # Source/sink time
-         'time': 'sink',
+         'time': argv[4],
 
          # Sink sites
-         'sites': np.array([12,13,14,15,16,17])
+         'sites': np.array([13,14,15,16,17,18]),
          }
 
 # DIRECTORIES
@@ -57,7 +57,7 @@ dirs = {'script': os.path.dirname(os.path.realpath(__file__)),
 fh = {'grid':    dirs['grid'] + 'griddata.nc',
       'clist':   dirs['plastic'] + 'country_list.in',
       'sink_list': dirs['plastic'] + 'sink_list.in',
-      'traj':    sorted(glob(dirs['traj'] + '*FwdMar' + param['mode'] + '.nc'))}
+      'traj':    sorted(glob(dirs['traj'] + 'Marine_' + param['mode'] + '*.zarr'))}
 
 # Convert sinking rates and beaching rates to correct units
 param['us'] = 1/(param['us_d']*3600*24)
@@ -154,14 +154,14 @@ def convert_events(fh_list, dt, us, ub, n_events, **kwargs):
     # Open all data
     for fhi, fh in tqdm(enumerate(fh_list), total=len(fh_list)):
         try:
-            with Dataset(fh, mode='r') as nc:
-                e_num = nc.variables['e_num'][:]
+            with xr.open_zarr(fh, mask_and_scale=False) as file:
+                e_num = file['e_num'].values
                 n_traj = np.shape(e_num)[0] # Number of trajectories in file
 
                 if n_traj:
                     # Extract origin date
-                    y0 = int(fh.split('/')[-1].split('_')[0])
-                    m0 = int(fh.split('/')[-1].split('_')[1])
+                    y0 = int(fh.split('/')[-1].split('_')[2])
+                    m0 = int(fh.split('/')[-1].split('_')[3])
                     t0 = datetime(year=y0, month=m0, day=1, hour=0)
 
                     # Firstly load primary variables into memory
@@ -170,10 +170,10 @@ def convert_events(fh_list, dt, us, ub, n_events, **kwargs):
                     raw_lat0_array = np.zeros((n_traj, n_events), dtype=np.float32)
 
                     for i in range(n_events):
-                        raw_event_array[:, i] = nc.variables['e' + str(i)][:, 0]
+                        raw_event_array[:, i] = file['e' + str(i)].values
 
-                    raw_lon0_array[:] = nc.variables['lon0'][:]
-                    raw_lat0_array[:] = nc.variables['lat0'][:]
+                    raw_lon0_array[:] = file['lon0'].values.reshape((-1,1))
+                    raw_lat0_array[:] = file['lat0'].values.reshape((-1,1))
 
                     # Update stats
                     total_particles += n_traj
@@ -320,7 +320,7 @@ for year in np.arange(param['y0'], param['y1']+1):
             print('Year ' + str(year) + '/' + str(param['y1']))
             print('Month ' + str(month+1) + '/12')
             print('Release' + str(release+1) + '/4')
-            yearmonth_fh = sorted(glob(dirs['traj'] + str(year) + '_' + str(month+1) + '_' + str(release) + '_*.nc'))
+            yearmonth_fh = sorted(glob(dirs['traj'] + 'Marine_' + param['mode'] + '_' + str(year) + '_' + str(month+1) + '_' + str(release) + '.zarr'))
 
             data, stats = convert_events(yearmonth_fh, param['dt'], param['us'], param['ub'], 25,
                                          particles_per_file=325233)

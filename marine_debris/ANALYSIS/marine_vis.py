@@ -38,13 +38,13 @@ param = {'grid_res': 1.0,                          # Grid resolution in degrees
          'mode': argv[3],
 
          # Source/sink time
-         'time': 'source',
+         'time': 'sink',
 
          # Sink sites
-         'sites': np.array([13,14,15,16,17,18]),
+         'sites': np.array([16]),
 
          # Names
-         'sink': 'Aldabra Group',
+         'sink': 'Praslin',
          'class': argv[4],
 
          # Plot ship tracks
@@ -107,14 +107,13 @@ with rasterio.open(fh['shipping']) as src:
 # PLOT                                                                       #
 ##############################################################################
 
-f = plt.figure(constrained_layout=True, figsize=(23.6, 10))
-gs = GridSpec(3, 4, figure=f, width_ratios=[0.91, 0.01, 0.29, 0.01])
+f = plt.figure(constrained_layout=True, figsize=(30, 11.5))
+gs = GridSpec(2, 4, figure=f, width_ratios=[2, 0.03, 1, 0.03], height_ratios=[1, 1])
 ax = []
 ax.append(f.add_subplot(gs[:, 0], projection = ccrs.PlateCarree())) # Main figure (flux probability)
 ax.append(f.add_subplot(gs[:, 1])) # Colorbar for main figure
 ax.append(f.add_subplot(gs[0, 2], projection = ccrs.PlateCarree())) # Fisheries 1
 ax.append(f.add_subplot(gs[1, 2], projection = ccrs.PlateCarree())) # Fisheries 2
-ax.append(f.add_subplot(gs[2, 2], projection = ccrs.PlateCarree())) # Fisheries 3
 ax.append(f.add_subplot(gs[:, 3])) # Colorbar for fisheries
 
 # f.subplots_adjust(hspace=0.02, wspace=0.02)
@@ -122,11 +121,16 @@ gl = []
 hist = []
 
 land_10m = cfeature.NaturalEarthFeature('physical', 'land', '10m',
-                                        edgecolor='white',
-                                        facecolor='black',
+                                        edgecolor='k',
+                                        facecolor='w',
                                         zorder=1)
 
-for i in [0, 2, 3, 4]:
+land_10k = cfeature.NaturalEarthFeature('physical', 'land', '10m',
+                                        edgecolor='w',
+                                        facecolor='k',
+                                        zorder=1)
+
+for i in [0, 2, 3]:
     ax[i].set_aspect(1)
     ax[i].set_facecolor('k')
 
@@ -135,15 +139,15 @@ hist.append(ax[0].pcolormesh(fmatrix.coords['longitude'], fmatrix.coords['latitu
                              cmap=cmr.sunburst_r, norm=colors.LogNorm(vmin=1e-5, vmax=1e-2),
                              transform=ccrs.PlateCarree(), rasterized=True))
 
-ax[0].add_feature(land_10m)
+ax[0].add_feature(land_10k)
 gl.append(ax[0].gridlines(crs=ccrs.PlateCarree(), draw_labels=True,
-                          linewidth=0.5, color='white', linestyle='--', zorder=11))
+                          linewidth=0.5, color='white', linestyle='-', zorder=11))
 gl[0].xlocator = mticker.FixedLocator(np.arange(-210, 210, 10))
 gl[0].ylocator = mticker.FixedLocator(np.arange(-90, 120, 10))
 gl[0].xlabels_top = False
 gl[0].ylabels_right = False
-gl[0].ylabel_style = {'size': 18}
-gl[0].xlabel_style = {'size': 18}
+gl[0].ylabel_style = {'size': 20}
+gl[0].xlabel_style = {'size': 20}
 ax[0].text(21, -39, 'Likelihood of ' + param['class'] + ' debris beaching at ' + param['sink'], fontsize=28, color='k', fontweight='bold')
 ax[0].set_xlim([20, 130])
 ax[0].set_ylim([-40, 30])
@@ -154,53 +158,54 @@ if param['tracks']:
     # sig_plot = ax[0].contourf(lons, lats, img,
     #                           levels=np.array([thresh, np.max(img)*2]), colors='k', alpha=0.3)
     sig_plot = ax[0].contourf(lons, lats, img,
-                              levels=np.array([thresh, np.max(img)*2]), colors='none', hatches=['\\\\\\\\'])
+                              levels=np.array([thresh, np.max(img)*2]), colors='none', hatches=['\\\\\\'])
 
 
-cb0 = plt.colorbar(hist[0], cax=ax[1], fraction=0.1)
+cb0 = plt.colorbar(hist[0], cax=ax[1], fraction=0.05)
 cb0.set_label('Mass fraction', size=24)
 ax[1].tick_params(axis='y', labelsize=22)
+
+fishing_cmap = cmr.torch_r
 
 # Input from purse seiners
 ps_input = fmatrix_mean_12*debris['purse_seiners_B_time_integral']
 hist.append(ax[2].pcolormesh(debris.coords['lon_bnd'], debris.coords['lat_bnd'],
                              ps_input/ps_input.sum(),
-                             cmap=cmr.ghostlight, norm=colors.LogNorm(vmin=1e-4, vmax=1e-2),
+                             cmap=fishing_cmap, norm=colors.LogNorm(vmin=1e-4, vmax=1e-2),
                              transform=ccrs.PlateCarree(), rasterized=True))
-ax[2].add_feature(land_10m)
-ax[2].text(21, -39, 'Purse seiners', fontsize=22, color='w', fontweight='bold')
+ax[2].add_feature(land_10k)
+ax[2].text(21, -39, param['class'] + ' debris from purse seiners', fontsize=22, color='k', fontweight='bold')
+ax[2].set_facecolor('w')
+
 
 # Input from drifting and set longlines
 ll_input = fmatrix_mean_12*debris['longlines_B_time_integral']
 hist.append(ax[3].pcolormesh(debris.coords['lon_bnd'], debris.coords['lat_bnd'],
                              ll_input/ll_input.sum(),
-                             cmap=cmr.ghostlight, norm=colors.LogNorm(vmin=1e-4, vmax=1e-2),
+                             cmap=fishing_cmap, norm=colors.LogNorm(vmin=1e-4, vmax=1e-2),
                              transform=ccrs.PlateCarree(), rasterized=True))
-ax[3].add_feature(land_10m)
-ax[3].text(21, -39, 'Set/drifting longlines', fontsize=22, color='w', fontweight='bold')
+ax[3].add_feature(land_10k)
+ax[3].text(21, -39, param['class'] + ' debris from set/drifting longlines', fontsize=22, color='k', fontweight='bold')
+ax[3].set_facecolor('w')
 
-# Input from pole and line and trollers
-pl_input = fmatrix_mean_12*debris['pole_and_line_and_trollers_B_time_integral']
-hist.append(ax[4].pcolormesh(debris.coords['lon_bnd'], debris.coords['lat_bnd'],
-                             pl_input/pl_input.sum(),
-                             cmap=cmr.ghostlight, norm=colors.LogNorm(vmin=1e-4, vmax=1e-2),
-                             transform=ccrs.PlateCarree(), rasterized=True))
-ax[4].add_feature(land_10m)
-ax[4].text(21, -39, 'Pole and line/trollers', fontsize=22, color='w', fontweight='bold')
-
-cb1 = plt.colorbar(hist[1], cax=ax[5])
+cb1 = plt.colorbar(hist[1], cax=ax[4])
 cb1.set_label('Normalised risk from fishery', size=24)
-ax[5].tick_params(axis='y', labelsize=22)
+ax[4].tick_params(axis='y', labelsize=22)
 
-for ii, i in enumerate([2, 3, 4]):
+for ii, i in enumerate([2, 3]):
     gl.append(ax[i].gridlines(crs=ccrs.PlateCarree(), draw_labels=True,
-                              linewidth=0.5, color='white', linestyle='--', zorder=11))
-    gl[ii+1].xlocator = mticker.FixedLocator(np.arange(-210, 210, 10))
-    gl[ii+1].ylocator = mticker.FixedLocator(np.arange(-90, 120, 10))
+                              linewidth=0.5, color='k', linestyle='-', zorder=11))
+    gl[ii+1].xlocator = mticker.FixedLocator(np.arange(-180, 225, 15))
+    gl[ii+1].ylocator = mticker.FixedLocator(np.arange(-90, 120, 15))
+    gl[ii+1].ylabel_style = {'size': 20}
+    gl[ii+1].xlabel_style = {'size': 20}
     gl[ii+1].xlabels_top = False
     gl[ii+1].ylabels_right = False
-    gl[ii+1].ylabels_left = False
-    gl[ii+1].xlabels_bottom = False
+    gl[ii+1].ylabels_left = True
+    gl[ii+1].xlabels_bottom = True
+
+ax[2].set_xlim([20, 130])
+ax[3].set_xlim([20, 130])
 
 if param['export']:
     plt.savefig(dirs['fig'] + 'marine_sources_' + param['mode'] + '_' + np.array2string(param['sites'], separator='-') + '_s' + str(param['us_d']) + '_b' + str(param['ub_d']) + '.png', bbox_inches='tight', dpi=300)
